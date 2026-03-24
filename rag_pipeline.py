@@ -1,20 +1,22 @@
 """
 rag_pipeline.py
 ---------------
-Orchestrates the full 10-step RAG pipeline:
+Orchestrates the upgraded 10-step Contextual Retrieval RAG pipeline:
 
   Step 1  – Receive user question
   Step 2  – Check conversation memory
-  Step 3  – Detect ambiguous terms
-  Step 4  – Classify query (subject + topic)
-  Step 5  – Apply glossary mapping
-  Step 6  – Rewrite query with context
-  Step 7  – Vector retrieval (BGE + Chroma)
-  Step 8  – Select top-K documents
-  Step 9  – Generate answer with SLM (Phi-3 via Ollama)
-  Step 10 – Return answer + evaluation metrics
+  Step 3  – Contextual Query Builder (normalise + confidence score + ambiguity
+            resolve + context-aware rewrite)
+  Step 4  – Ambiguity detection (final check on rewritten query)
+  Step 5  – Query classification (subject + topic)
+  Step 6  – Glossary mapping (synonym / concept expansion)
+  Step 7  – Vector retrieval (BGE embeddings + Chroma)
+  Step 8  – Top-K document selection
+  Step 9  – Answer generation (Phi-3 via Ollama)
+  Step 10 – Evaluation metrics + memory update
 
-Each step logs a clearly formatted message so the pipeline is transparent.
+Each step prints a clearly labelled debug line so the pipeline is fully
+transparent from the command line and the Streamlit sidebar.
 """
 
 from __future__ import annotations
@@ -26,6 +28,8 @@ from langchain.prompts import PromptTemplate
 from langchain_community.vectorstores import Chroma
 
 from context_memory import ConversationMemory
+from topic_memory_manager import TopicMemoryManager
+from contextual_query_builder import ContextualQueryBuilder
 from query_classifier import classify_query, detect_topic_shift
 from glossary_mapper import (
     get_ambiguous_terms,
@@ -63,6 +67,7 @@ CLARIFICATION_MSG = (
 @dataclass
 class PipelineResult:
     """Container for all outputs produced by one pipeline run."""
+
     query: str
     rewritten_query: str
     detected_topic: str | None
@@ -83,8 +88,10 @@ class PipelineResult:
 
 class RAGPipeline:
     """
-    Full conversational RAG pipeline.
-    Stateless except for the vector store; conversation memory is passed in.
+    Full conversational Contextual Retrieval RAG pipeline.
+
+    Stateless except for the vector store and the ContextualQueryBuilder;
+    per-session state (ConversationMemory, TopicMemoryManager) is passed in.
     """
 
     def __init__(
@@ -96,7 +103,8 @@ class RAGPipeline:
         self.vector_store = vector_store
         self.top_k = top_k
         self.llm = Ollama(model=model_name, temperature=0.1)
-        # Collect all corpus docs for recall computation
+        self._ctx_builder = ContextualQueryBuilder()
+        # Collect all corpus docs once (for recall denominator)
         texts, metadatas = get_texts_and_metadatas()
         self.all_docs = [
             Document(page_content=t, metadata=m)
@@ -109,13 +117,16 @@ class RAGPipeline:
         self,
         user_query: str,
         memory: ConversationMemory,
+        topic_manager: TopicMemoryManager | None = None,
     ) -> PipelineResult:
         """
-        Execute the full pipeline for one user query.
+        Execute the full contextual RAG pipeline for one user query.
 
         Args:
-            user_query: Raw text typed by the user.
-            memory:     Current conversation memory (mutated in-place on success).
+            user_query:     Raw text typed by the user.
+            memory:         Current conversation memory (mutated in-place).
+            topic_manager:  Optional topic memory manager (mutated in-place).
+                            Pass ``None`` to skip topic-manager tracking.
 
         Returns:
             PipelineResult with answer, metrics, and step log.
@@ -136,133 +147,135 @@ class RAGPipeline:
         # ── Step 1: Receive question ──────────────────────────────────────────
         result.log(1, f"User question received: '{user_query}'")
 
-        # ── Step 2: Check conversation memory ────────────────────────────────
+        # ── Step 2: Conversation memory ───────────────────────────────────────
         last_topic = memory.get_last_topic()
         recent_topics = memory.get_recent_topics()
+        active_topic = (
+            topic_manager.get_active_topic() if topic_manager else last_topic
+        )
         result.log(
             2,
             f"Conversation memory → last topic: '{last_topic}' | "
-            f"recent topics: {recent_topics}",
+            f"recent: {recent_topics} | "
+            f"active (with decay): '{active_topic}'",
         )
 
-        # ── Step 3: Detect ambiguous terms ────────────────────────────────────
-        ambiguous = get_ambiguous_terms(user_query)
+        # ── Step 3: Contextual Query Builder ──────────────────────────────────
+        ctx_result = self._ctx_builder.build(user_query, memory)
+        result.log(
+            3,
+            f"Contextual Query Builder → "
+            f"normalised: '{ctx_result.normalized_query}' | "
+            f"topic confidence: {ctx_result.topic_confidence.top_topic!r} "
+            f"(score={ctx_result.topic_confidence.top_score}) | "
+            f"topic switched: {ctx_result.topic_switched}",
+        )
+        for note in ctx_result.debug_notes:
+            result.log(3, f"  → {note}")
+
+        # The contextually rewritten query is used for all downstream steps
+        ctx_rewritten = ctx_result.rewritten_query
+        ctx_topic = ctx_result.resolved_topic
+
+        # ── Step 4: Ambiguity detection (on the rewritten query) ──────────────
+        # After the ContextualQueryBuilder the query is usually already resolved;
+        # this step handles any remaining ambiguity that slipped through.
+        ambiguous = get_ambiguous_terms(ctx_rewritten)
         result.ambiguous_terms = ambiguous
-        result.log(3, f"Ambiguous terms detected: {ambiguous or 'none'}")
+        result.log(4, f"Ambiguity detection → terms: {ambiguous or 'none'}")
 
-        # Try to resolve each ambiguous term
-        resolved_from_ambiguity: str | None = None
-        for term in ambiguous:
-            # First, try signals within the query itself
-            resolved = disambiguate_with_signals(term, user_query)
-            if resolved:
-                result.log(3, f"  → '{term}' resolved via query signals → '{resolved}'")
-                resolved_from_ambiguity = resolved
-                break
+        resolved_from_ambiguity: str | None = ctx_topic
+        needs_clarification = False
 
-            # Next, check conversation context
-            if last_topic and last_topic in AMBIGUOUS_TERMS.get(term, []):
-                # Decide: is there a shift signal (e.g. 'move', 'ride') in the query?
-                options = AMBIGUOUS_TERMS[term]
-                # Look for any non-last-topic signal in the query
-                shift_resolved = None
-                for option in options:
-                    if option != last_topic:
-                        # Check if any word that strongly signals this option is present
-                        option_tokens = set(option.split())
-                        query_tokens = set(user_query.lower().split())
-                        if option_tokens & query_tokens:
-                            shift_resolved = option
-                            break
-
-                if shift_resolved:
+        if ambiguous and not ctx_topic:
+            for term in ambiguous:
+                resolved = disambiguate_with_signals(term, ctx_rewritten)
+                if resolved:
                     result.log(
-                        3,
-                        f"  → '{term}' → intent shift detected → '{shift_resolved}' "
-                        f"(was '{last_topic}')",
+                        4, f"  → '{term}' resolved via signals → '{resolved}'"
                     )
-                    resolved_from_ambiguity = shift_resolved
-                else:
-                    result.log(
-                        3,
-                        f"  → '{term}' → no shift; continuing with context topic '{last_topic}'",
-                    )
+                    resolved_from_ambiguity = resolved
+                    break
+
+                if last_topic and last_topic in AMBIGUOUS_TERMS.get(term, []):
                     resolved_from_ambiguity = last_topic
+                    result.log(
+                        4,
+                        f"  → '{term}' resolved via memory → '{last_topic}'",
+                    )
+                    break
+
+                # Still unresolved → request clarification
+                options_str = ", ".join(AMBIGUOUS_TERMS.get(term, []))
+                result.clarification_needed = True
+                result.clarification_message = CLARIFICATION_MSG.format(
+                    term=term, options=options_str
+                )
+                result.log(
+                    4,
+                    f"  → '{term}' still ambiguous (options: {options_str}). "
+                    "Requesting clarification.",
+                )
+                needs_clarification = True
                 break
 
-            # Cannot resolve: ask for clarification
-            options_str = ", ".join(AMBIGUOUS_TERMS.get(term, []))
-            result.clarification_needed = True
-            result.clarification_message = CLARIFICATION_MSG.format(
-                term=term, options=options_str
-            )
-            result.log(
-                3,
-                f"  → '{term}' is ambiguous (options: {options_str}). "
-                "Requesting clarification.",
-            )
-            # Store partial turn and return early
+        if needs_clarification:
             memory.add_turn(user_query=user_query, resolved_topic=None)
             return result
 
-        # ── Step 4: Query classification ──────────────────────────────────────
-        classification = classify_query(user_query)
+        # ── Step 5: Query classification ──────────────────────────────────────
+        classification = classify_query(ctx_rewritten)
         topic_from_classifier = classification["topic"]
         subject_from_classifier = classification["subject"]
         result.log(
-            4,
+            5,
             f"Query classification → subject: '{subject_from_classifier}' "
             f"(score={classification['subject_score']}), "
             f"topic: '{topic_from_classifier}' "
             f"(score={classification['topic_score']})",
         )
 
-        # ── Step 5: Glossary mapping / expand query ───────────────────────────
-        enriched_query, topic_from_glossary = expand_query(user_query)
+        # ── Step 6: Glossary mapping ───────────────────────────────────────────
+        enriched_query, topic_from_glossary = expand_query(ctx_rewritten)
         result.log(
-            5,
+            6,
             f"Glossary mapping → topic from glossary: '{topic_from_glossary}' | "
             f"enriched query: '{enriched_query}'",
         )
 
-        # ── Determine final topic (priority: ambiguity resolution > classifier > glossary > memory)
-        final_topic = (
-            resolved_from_ambiguity
-            or topic_from_classifier
-            or topic_from_glossary
-            or last_topic
-        )
+        # ── Determine final topic ─────────────────────────────────────────────
+        # Priority: contextual builder > classifier (high confidence) > glossary > memory
+        final_topic = resolved_from_ambiguity or topic_from_glossary or last_topic
         final_subject = subject_from_classifier
 
-        # Detect topic shift: if classifier fires confidently, prefer it over memory
-        if (topic_from_classifier
-                and classification["topic_score"] >= 2
-                and detect_topic_shift(topic_from_classifier, last_topic)):
+        if (
+            topic_from_classifier
+            and classification["topic_score"] >= 2
+            and detect_topic_shift(topic_from_classifier, final_topic)
+        ):
             final_topic = topic_from_classifier
-            result.log(4, f"  → Topic shift detected; overriding memory with '{final_topic}'")
+            result.log(
+                5, f"  → High-confidence classifier topic overrides: '{final_topic}'"
+            )
 
         result.detected_topic = final_topic
         result.detected_subject = final_subject
 
-        # ── Step 6: Rewrite query ─────────────────────────────────────────────
-        rewritten = _rewrite_query(user_query, final_topic, memory)
-        result.rewritten_query = rewritten
-        result.log(6, f"Rewritten query: '{rewritten}'")
+        # Choose best query for retrieval: prefer the enriched glossary query
+        retrieval_query = enriched_query
+        result.rewritten_query = retrieval_query
 
         # ── Step 7: Vector retrieval ──────────────────────────────────────────
-        result.log(7, f"Performing semantic retrieval (top-{self.top_k}) …")
+        result.log(7, f"Vector retrieval (top-{self.top_k}) on: '{retrieval_query}'")
         retrieved = retrieve_top_k(
             self.vector_store,
-            rewritten,
+            retrieval_query,
             k=self.top_k,
             topic_filter=final_topic,
         )
-        result.log(
-            7,
-            f"Retrieved {len(retrieved)} document(s) from Chroma.",
-        )
+        result.log(7, f"Retrieved {len(retrieved)} document(s) from Chroma.")
 
-        # ── Step 8: Top-K selection ───────────────────────────────────────────
+        # ── Step 8: Top-K document selection ──────────────────────────────────
         result.retrieved_docs = retrieved[: self.top_k]
         result.log(8, f"Selected {len(result.retrieved_docs)} top-K documents:")
         for i, doc in enumerate(result.retrieved_docs, 1):
@@ -290,9 +303,9 @@ class RAGPipeline:
         result.answer = answer.strip()
         result.log(10, f"Answer generated ({len(result.answer)} chars).")
 
-        # ── Evaluation metrics ────────────────────────────────────────────────
+        # ── Step 10: Evaluation metrics ───────────────────────────────────────
         result.metrics = compute_all_metrics(
-            query=rewritten,
+            query=retrieval_query,
             answer=result.answer,
             retrieved_docs=result.retrieved_docs,
             all_docs=self.all_docs,
@@ -300,12 +313,14 @@ class RAGPipeline:
             k=self.top_k,
         )
 
-        # ── Update memory ─────────────────────────────────────────────────────
+        # ── Update memory and topic manager ───────────────────────────────────
         memory.add_turn(
             user_query=user_query,
             resolved_topic=final_topic,
             answer_snippet=result.answer[:120],
         )
+        if topic_manager is not None:
+            topic_manager.update(final_topic)
 
         return result
 

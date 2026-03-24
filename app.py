@@ -25,6 +25,7 @@ st.set_page_config(
 
 # ── Lazy imports (after set_page_config) ─────────────────────────────────────
 from context_memory import ConversationMemory
+from topic_memory_manager import TopicMemoryManager
 from retriever import build_vector_store
 from rag_pipeline import RAGPipeline
 from evaluation import format_metrics_table
@@ -197,13 +198,16 @@ def render_chat_column(pipeline: RAGPipeline) -> None:
 
     # Rebuild memory from serialised session state
     memory = ConversationMemory.from_list(st.session_state.memory_data, max_turns=5)
+    topic_manager = TopicMemoryManager.from_dict(st.session_state.topic_manager_data)
 
     # Run pipeline
     with st.spinner("🤔 Thinking…"):
-        result = pipeline.run(user_query=user_input, memory=memory)
+        result = pipeline.run(user_query=user_input, memory=memory,
+                              topic_manager=topic_manager)
 
     # Persist memory back to session state
     st.session_state.memory_data = memory.to_list()
+    st.session_state.topic_manager_data = topic_manager.to_dict()
 
     # Persist step log and metadata for the right panel
     st.session_state.last_step_log = result.step_log
