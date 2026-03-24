@@ -331,10 +331,13 @@ def _rewrite_query(
     if any(query_lower.startswith(p) for p in vague_prefixes) and resolved_topic:
         return f"Explain {resolved_topic} in detail"
 
-    # For 'what is cycle?' type queries, replace 'cycle' with resolved topic
+    # For 'what is cycle?' type queries, replace 'cycle' with resolved topic.
+    # Guard: only perform the replacement when the resolved topic is NOT already
+    # present in the query – this prevents "water cycle" → "water water cycle".
     if resolved_topic and "cycle" in query_lower and resolved_topic != "bicycle":
-        rewritten = query_lower.replace("cycle", resolved_topic)
-        return rewritten.capitalize()
+        if resolved_topic.lower() not in query_lower:
+            rewritten = query_lower.replace("cycle", resolved_topic, 1)
+            return rewritten.capitalize()
 
     # Default: append topic as context hint
     if resolved_topic and resolved_topic.lower() not in query_lower:

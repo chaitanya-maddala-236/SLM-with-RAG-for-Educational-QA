@@ -5,6 +5,8 @@ Maps ambiguous terms and synonyms to canonical topic names.
 Also provides term expansion for better retrieval.
 """
 
+import re
+
 # ── Canonical topic names (must match metadata in data_loader.py) ────────────
 TOPICS = ["water cycle", "carbon cycle", "bicycle", "photosynthesis"]
 
@@ -135,8 +137,21 @@ def expand_query(query: str) -> tuple[str, str | None]:
 def get_ambiguous_terms(query: str) -> list[str]:
     """
     Return a list of ambiguous terms found in the query.
+
+    If a complete canonical topic name (e.g. "water cycle") is already
+    present in the query the topic is unambiguous, so no terms are flagged.
+    This prevents false positives such as treating "water cycle" as
+    ambiguous because the word "cycle" appears in it.
+
+    Word tokens are extracted with a word-boundary regex so that trailing
+    punctuation (e.g. "cycle?") does not prevent a match.
     """
-    tokens = query.lower().split()
+    query_lower = query.lower()
+    # If a full known topic is explicitly present, nothing is ambiguous.
+    for topic in TOPICS:
+        if topic in query_lower:
+            return []
+    tokens = re.findall(r"\b[a-z0-9]+\b", query_lower)
     return [tok for tok in tokens if tok in AMBIGUOUS_TERMS]
 
 

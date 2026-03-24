@@ -4,9 +4,9 @@ app.py
 Streamlit UI for the Educational Conversational RAG System.
 
 Layout:
-  ● Left sidebar  – pipeline step viewer (live debug log)
-  ● Main area     – chat interface
-  ● Bottom panel  – evaluation metrics table
+  ● Left sidebar   – controls (clear conversation, stack info)
+  ● Left column    – chat interface (3/5 of page width)
+  ● Right column   – pipeline step viewer + evaluation metrics table (2/5)
 
 Run with:
     streamlit run app.py
@@ -47,91 +47,138 @@ def load_pipeline(_vector_store: Chroma) -> RAGPipeline:
 
 def init_session_state() -> None:
     if "chat_history" not in st.session_state:
-        # List of dicts: {"role": "user"|"assistant", "content": str}
         st.session_state.chat_history = []
     if "memory_data" not in st.session_state:
-        st.session_state.memory_data = []          # serialised ConversationMemory
+        st.session_state.memory_data = []
     if "last_step_log" not in st.session_state:
-        st.session_state.last_step_log = []        # step log from latest pipeline run
+        st.session_state.last_step_log = []
     if "last_metrics" not in st.session_state:
         st.session_state.last_metrics = {}
     if "last_result_meta" not in st.session_state:
-        st.session_state.last_result_meta = {}     # topic, subject, retrieved docs
+        st.session_state.last_result_meta = {}
 
 
-# ── Sidebar: Pipeline Step Viewer ─────────────────────────────────────────────
+# ── Sidebar: Controls only ────────────────────────────────────────────────────
 
-def render_sidebar(step_log: list[str], result_meta: dict) -> None:
-    st.sidebar.title("🔍 Pipeline Viewer")
-    st.sidebar.caption("Live debug output from the last query")
+def render_controls() -> None:
+    with st.sidebar:
+        st.title("⚙️ Controls")
+        if st.button("🗑️ Clear Conversation", use_container_width=True):
+            st.session_state.chat_history = []
+            st.session_state.memory_data = []
+            st.session_state.last_step_log = []
+            st.session_state.last_metrics = {}
+            st.session_state.last_result_meta = {}
+            st.rerun()
 
-    if not step_log:
-        st.sidebar.info("Ask a question to see the pipeline in action.")
-        return
+        st.divider()
+        st.caption(
+            "**Stack:** Phi-3 · BGE-small · Chroma · LangChain\n\n"
+            "Ensure Ollama is running:\n```\nollama serve\nollama pull phi3\n```"
+        )
 
-    # Key facts at a glance
-    with st.sidebar.container():
-        col1, col2 = st.sidebar.columns(2)
-        col1.metric("Topic", result_meta.get("topic") or "—")
-        col2.metric("Subject", result_meta.get("subject") or "—")
-        if result_meta.get("clarification"):
-            st.sidebar.warning(f"⚠️ {result_meta['clarification']}")
-
-    st.sidebar.divider()
-
-    # Step-by-step log
-    for entry in step_log:
-        # Colour-code by step number
-        step_num = int(entry.split("]")[0].replace("[Step", "").strip()) \
-            if entry.startswith("[Step") else 0
-        if step_num in (1,):
-            st.sidebar.markdown(f"🟣 `{entry}`")
-        elif step_num in (2, 4, 7):
-            st.sidebar.markdown(f"🔵 `{entry}`")
-        elif step_num in (3,):
-            st.sidebar.markdown(f"🟡 `{entry}`")
-        elif step_num in (9, 10):
-            st.sidebar.markdown(f"🟢 `{entry}`")
-        else:
-            st.sidebar.markdown(f"⚪ `{entry}`")
-
-    # Retrieved documents
-    if result_meta.get("retrieved_docs"):
-        st.sidebar.divider()
-        st.sidebar.subheader("📄 Retrieved Documents")
-        for i, doc in enumerate(result_meta["retrieved_docs"], 1):
-            with st.sidebar.expander(
-                f"Doc {i} · {doc.metadata.get('topic')} · Grade {doc.metadata.get('grade')}"
-            ):
-                st.write(doc.page_content)
-                st.caption(f"Subject: {doc.metadata.get('subject')}")
-
-
-# ── Main chat area ────────────────────────────────────────────────────────────
-
-def render_chat(pipeline: RAGPipeline) -> None:
-    st.title("🎓 EduRAG — Educational Conversational QA")
-    st.caption(
-        "Powered by Phi-3 (Ollama) · BGE Embeddings · Chroma · LangChain\n\n"
-        "Topics: water cycle, carbon cycle, bicycle, photosynthesis"
-    )
-
-    # Example queries
-    with st.expander("💡 Try these example queries (demonstrates conversational context)"):
-        st.markdown(
-            """
-**Sequence 1 – Ambiguity resolved via context:**
+        st.divider()
+        with st.expander("💡 Example queries"):
+            st.markdown(
+                """
+**Sequence 1 – Ambiguity via context:**
 1. `Explain water cycle`
-2. `What is cycle?`  ← system infers *water cycle* from memory
-3. `How does a cycle move?`  ← system detects intent shift → *bicycle*
+2. `What is cycle?`  ← infers *water cycle*
+3. `How does a cycle move?`  ← shifts to *bicycle*
 
-**Sequence 2 – Direct topic queries:**
+**Sequence 2 – Direct queries:**
 - `How does photosynthesis work?`
 - `What is the Calvin cycle?`
 - `Explain bicycle gears`
 - `What causes carbon emissions?`
-            """
-        )
+                """
+            )
+
+
+# ── Right panel: pipeline viewer + evaluation table ───────────────────────────
+
+def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) -> None:
+    """Render the pipeline processing steps and evaluation metrics table."""
+
+    # ── Pipeline Processing ────────────────────────────────────────────────
+    st.subheader("🔍 Pipeline Processing")
+
+    if not step_log:
+        st.info("Ask a question to see the pipeline steps here.")
+    else:
+        # Key facts at a glance
+        topic = result_meta.get("topic")
+        subject = result_meta.get("subject")
+        if topic or subject:
+            c1, c2 = st.columns(2)
+            c1.metric("Topic", topic or "—")
+            c2.metric("Subject", subject or "—")
+
+        if result_meta.get("clarification"):
+            st.warning(f"⚠️ {result_meta['clarification']}")
+
+        # Step-by-step log inside a scrollable container
+        with st.container(height=300):
+            for entry in step_log:
+                try:
+                    step_num = int(entry.split("]")[0].replace("[Step", "").strip())
+                except (ValueError, IndexError):
+                    step_num = 0
+
+                if step_num == 1:
+                    st.markdown(f"🟣 `{entry}`")
+                elif step_num in (2, 4, 7):
+                    st.markdown(f"🔵 `{entry}`")
+                elif step_num == 3:
+                    st.markdown(f"🟡 `{entry}`")
+                elif step_num in (9, 10):
+                    st.markdown(f"🟢 `{entry}`")
+                else:
+                    st.markdown(f"⚪ `{entry}`")
+
+        # Retrieved documents
+        if result_meta.get("retrieved_docs"):
+            with st.expander("📄 Retrieved Documents", expanded=False):
+                for i, doc in enumerate(result_meta["retrieved_docs"], 1):
+                    st.markdown(
+                        f"**Doc {i}** · `{doc.metadata.get('topic')}` "
+                        f"· Grade {doc.metadata.get('grade')}"
+                    )
+                    st.write(doc.page_content)
+                    st.caption(f"Subject: {doc.metadata.get('subject')}")
+                    if i < len(result_meta["retrieved_docs"]):
+                        st.divider()
+
+    # ── Evaluation Metrics ─────────────────────────────────────────────────
+    if metrics:
+        st.divider()
+        st.subheader("📊 Evaluation Metrics")
+
+        # Build a simple table as two lists
+        metric_names = list(metrics.keys())
+        metric_scores = [f"{v:.3f}" for v in metrics.values()]
+        metric_status = [
+            "✓ good" if v >= 0.7 else ("⚠ check" if v >= 0.5 else "✗ low")
+            for v in metrics.values()
+        ]
+
+        # Render as a native Streamlit table (no pandas required)
+        table_data = {
+            "Metric": metric_names,
+            "Score": metric_scores,
+            "Status": metric_status,
+        }
+        st.table(table_data)
+
+
+# ── Chat column ───────────────────────────────────────────────────────────────
+
+def render_chat_column(pipeline: RAGPipeline) -> None:
+    st.title("🎓 EduRAG — Educational Conversational QA")
+    st.caption(
+        "Powered by Phi-3 (Ollama) · BGE Embeddings · Chroma · LangChain  \n"
+        "Topics: water cycle · carbon cycle · bicycle · photosynthesis"
+    )
 
     # Render existing chat history
     for msg in st.session_state.chat_history:
@@ -158,7 +205,7 @@ def render_chat(pipeline: RAGPipeline) -> None:
     # Persist memory back to session state
     st.session_state.memory_data = memory.to_list()
 
-    # Persist step log and metadata
+    # Persist step log and metadata for the right panel
     st.session_state.last_step_log = result.step_log
     st.session_state.last_metrics = result.metrics
     st.session_state.last_result_meta = {
@@ -172,12 +219,9 @@ def render_chat(pipeline: RAGPipeline) -> None:
     if result.clarification_needed and result.clarification_message:
         assistant_msg = f"🤔 {result.clarification_message}"
     else:
-        # Show rewritten query if it changed
         note = ""
         if result.rewritten_query != user_input:
-            note = (
-                f"\n\n> *Interpreted as: \"{result.rewritten_query}\"*\n\n"
-            )
+            note = f"\n\n> *Interpreted as: \"{result.rewritten_query}\"*\n\n"
         assistant_msg = note + result.answer
 
     st.session_state.chat_history.append(
@@ -185,55 +229,6 @@ def render_chat(pipeline: RAGPipeline) -> None:
     )
     with st.chat_message("assistant"):
         st.markdown(assistant_msg)
-
-
-# ── Evaluation metrics panel ──────────────────────────────────────────────────
-
-def render_metrics(metrics: dict) -> None:
-    if not metrics:
-        return
-
-    st.divider()
-    st.subheader("📊 Evaluation Metrics (last query)")
-
-    cols = st.columns(len(metrics))
-    colours = {
-        "high":   "normal",
-        "medium": "off",
-        "low":    "inverse",
-    }
-
-    for col, (name, score) in zip(cols, metrics.items()):
-        delta_colour = "normal" if score >= 0.7 else ("off" if score >= 0.5 else "inverse")
-        col.metric(
-            label=name,
-            value=f"{score:.3f}",
-            delta=f"{'✓ good' if score >= 0.7 else '⚠ check'}",
-            delta_color=delta_colour,
-        )
-
-    # Also show the ASCII table (collapsible)
-    with st.expander("View as text table"):
-        st.code(format_metrics_table(metrics), language=None)
-
-
-# ── Controls ──────────────────────────────────────────────────────────────────
-
-def render_controls() -> None:
-    with st.sidebar:
-        st.divider()
-        if st.button("🗑️ Clear Conversation", use_container_width=True):
-            st.session_state.chat_history = []
-            st.session_state.memory_data = []
-            st.session_state.last_step_log = []
-            st.session_state.last_metrics = {}
-            st.session_state.last_result_meta = {}
-            st.rerun()
-
-        st.caption(
-            "**Stack:** Phi-3 · BGE-small · Chroma · LangChain\n\n"
-            "Ensure Ollama is running:\n```\nollama serve\nollama pull phi3\n```"
-        )
 
 
 # ── Entry point ───────────────────────────────────────────────────────────────
@@ -245,16 +240,23 @@ def main() -> None:
     vector_store = load_vector_store()
     pipeline = load_pipeline(vector_store)
 
-    # Render UI
-    render_sidebar(
-        step_log=st.session_state.last_step_log,
-        result_meta=st.session_state.last_result_meta,
-    )
+    # Sidebar: controls + stack info
     render_controls()
 
-    render_chat(pipeline)
-    render_metrics(st.session_state.last_metrics)
+    # Main area: chat (left) | pipeline + metrics (right)
+    chat_col, right_col = st.columns([3, 2], gap="large")
+
+    with chat_col:
+        render_chat_column(pipeline)
+
+    with right_col:
+        render_right_panel(
+            step_log=st.session_state.last_step_log,
+            result_meta=st.session_state.last_result_meta,
+            metrics=st.session_state.last_metrics,
+        )
 
 
 if __name__ == "__main__":
     main()
+
