@@ -37,7 +37,13 @@ from glossary_mapper import (
     expand_query,
     AMBIGUOUS_TERMS,
 )
-from retriever import retrieve_top_k
+from retriever import (
+    retrieve_top_k,
+    build_bm25_index,
+    hybrid_search,
+    hierarchical_retrieve,
+    BM25Index,
+)
 from evaluation import compute_all_metrics
 from data_loader import get_texts_and_metadatas
 
@@ -57,7 +63,8 @@ Question: {question}
 Answer:""",
 )
 
-TOP_K = 5          # number of documents to retrieve
+TOP_K = 5          # number of documents to return after reranking
+RETRIEVAL_CANDIDATES = 20   # wider pool fetched before reranking
 CLARIFICATION_MSG = (
     "I found the term '{term}' in your question, which could mean: {options}. "
     "Could you clarify which one you meant?"
@@ -104,12 +111,19 @@ class RAGPipeline:
         self.top_k = top_k
         self.llm = Ollama(model=model_name, temperature=0.1)
         self._ctx_builder = ContextualQueryBuilder()
-        # Collect all corpus docs once (for recall denominator)
+        # Collect all corpus docs once (for recall denominator and BM25 index)
         texts, metadatas = get_texts_and_metadatas()
         self.all_docs = [
             Document(page_content=t, metadata=m)
             for t, m in zip(texts, metadatas)
         ]
+        # Build BM25 index for hybrid search (gracefully skipped if rank_bm25
+        # is not installed)
+        self._bm25_index: BM25Index | None = build_bm25_index(self.all_docs)
+        if self._bm25_index is not None:
+            print("[Init] BM25 index built for hybrid search.")
+        else:
+            print("[Init] rank_bm25 not installed; using vector-only retrieval.")
 
     # ── Public entry point ────────────────────────────────────────────────────
 
@@ -162,13 +176,20 @@ class RAGPipeline:
 
         # ── Step 3: Contextual Query Builder ──────────────────────────────────
         ctx_result = self._ctx_builder.build(user_query, memory)
+        shift_info = (
+            f" ({ctx_result.ambiguity_result.shift_reason})"
+            if ctx_result.ambiguity_result.shift_detected
+            else ""
+        )
         result.log(
             3,
             f"Contextual Query Builder → "
             f"normalised: '{ctx_result.normalized_query}' | "
             f"topic confidence: {ctx_result.topic_confidence.top_topic!r} "
             f"(score={ctx_result.topic_confidence.top_score}) | "
-            f"topic switched: {ctx_result.topic_switched}",
+            f"topic switched: {ctx_result.topic_switched} | "
+            f"shift detected: {ctx_result.ambiguity_result.shift_detected}"
+            + shift_info,
         )
         for note in ctx_result.debug_notes:
             result.log(3, f"  → {note}")
@@ -265,15 +286,21 @@ class RAGPipeline:
         retrieval_query = enriched_query
         result.rewritten_query = retrieval_query
 
-        # ── Step 7: Vector retrieval ──────────────────────────────────────────
-        result.log(7, f"Vector retrieval (top-{self.top_k}) on: '{retrieval_query}'")
-        retrieved = retrieve_top_k(
-            self.vector_store,
-            retrieval_query,
-            k=self.top_k,
-            topic_filter=final_topic,
+        # ── Step 7: Hierarchical retrieval (topic-route → hybrid BM25+vector) ──
+        result.log(
+            7,
+            f"Hierarchical retrieval (top-{RETRIEVAL_CANDIDATES} candidates, "
+            f"hybrid BM25+vector) on: '{retrieval_query}' "
+            f"| topic route: '{final_topic or 'none'}'",
         )
-        result.log(7, f"Retrieved {len(retrieved)} document(s) from Chroma.")
+        retrieved = hierarchical_retrieve(
+            vector_store=self.vector_store,
+            bm25_index=self._bm25_index,
+            query=retrieval_query,
+            topic=final_topic,
+            k=self.top_k,
+        )
+        result.log(7, f"Retrieved {len(retrieved)} document(s) after reranking.")
 
         # ── Step 8: Top-K document selection ──────────────────────────────────
         result.retrieved_docs = retrieved[: self.top_k]
