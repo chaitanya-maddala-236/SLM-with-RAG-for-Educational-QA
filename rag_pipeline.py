@@ -262,7 +262,7 @@ class RAGPipeline:
         result.detected_subject = final_subject
 
         # Choose best query for retrieval: prefer the enriched glossary query
-        retrieval_query = enriched_query if enriched_query != ctx_rewritten else ctx_rewritten
+        retrieval_query = enriched_query
         result.rewritten_query = retrieval_query
 
         # ── Step 7: Vector retrieval ──────────────────────────────────────────

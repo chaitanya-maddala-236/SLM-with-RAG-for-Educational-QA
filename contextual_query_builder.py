@@ -50,16 +50,17 @@ from glossary_mapper import AMBIGUOUS_TERMS, DISAMBIGUATION_SIGNALS, GLOSSARY
 TOPICS: list[str] = ["water cycle", "carbon cycle", "bicycle", "photosynthesis"]
 
 # ── Extended ambiguous terms ──────────────────────────────────────────────────
-# Superset of glossary_mapper.AMBIGUOUS_TERMS; adds general ambiguous words.
+# Superset of glossary_mapper.AMBIGUOUS_TERMS; adds domain-relevant words that
+# are genuinely ambiguous across the topics covered by this system.
 EXTENDED_AMBIGUOUS_TERMS: dict[str, list[str]] = {
     **AMBIGUOUS_TERMS,
-    # Additional terms the problem statement requires:
-    "cell":    ["photosynthesis", "carbon cycle"],
+    # Domain terms ambiguous across multiple educational topics:
+    "cell":    ["photosynthesis", "carbon cycle"],  # biology cell vs. battery cell
     "model":   ["water cycle", "carbon cycle", "photosynthesis", "bicycle"],
     "system":  ["water cycle", "carbon cycle", "photosynthesis"],
     "process": ["water cycle", "carbon cycle", "photosynthesis"],
     "reaction": ["photosynthesis", "carbon cycle"],
-    # Pronouns that must be resolved via memory
+    # Pronouns that must always be resolved via memory
     "it":   [],
     "this": [],
     "that": [],
@@ -94,6 +95,11 @@ TOPIC_KEYWORD_WEIGHTS: dict[str, dict[str, float]] = {
 
 # Minimum weighted score required to consider a topic "high confidence"
 TOPIC_SWITCH_THRESHOLD: float = 2.0
+
+# Divisor used to normalise a topic score into a [0, 1] confidence value.
+# A single strong keyword (e.g. "chlorophyll" = 3.0) divided by this yields
+# 0.75; the maximum reasonable compound score (≈8–12) caps at 1.0 via min().
+_SCORE_NORMALISER: float = 4.0
 
 
 # ── 1. Query Normalizer ───────────────────────────────────────────────────────
@@ -263,7 +269,7 @@ class AmbiguityResolver:
                 ambiguous_terms=[],
                 resolved_topic=topic_confidence.top_topic,
                 resolution_source="query_signals",
-                confidence=min(1.0, topic_confidence.top_score / 4.0),
+                confidence=min(1.0, topic_confidence.top_score / _SCORE_NORMALISER),
             )
 
         # Priority 1: High-confidence topic from query keywords
@@ -272,7 +278,7 @@ class AmbiguityResolver:
                 ambiguous_terms=ambiguous_found,
                 resolved_topic=topic_confidence.top_topic,
                 resolution_source="query_signals",
-                confidence=min(1.0, topic_confidence.top_score / 4.0),
+                confidence=min(1.0, topic_confidence.top_score / _SCORE_NORMALISER),
             )
 
         # Priority 2: In-query disambiguation signals
@@ -350,6 +356,15 @@ class ContextualQueryBuilder:
         self._normalizer = QueryNormalizer()
         self._scorer = TopicConfidenceScorer()
         self._resolver = AmbiguityResolver()
+        # Pre-compute multi-word GLOSSARY phrases that contain an ambiguous term.
+        # Used in _rewrite to skip substitution when the term is part of a
+        # meaningful compound phrase already in the query (e.g. "calvin cycle").
+        self._compound_phrases: set[str] = {
+            phrase
+            for phrase in GLOSSARY
+            if " " in phrase
+            and any(tok in EXTENDED_AMBIGUOUS_TERMS for tok in phrase.split())
+        }
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -543,9 +558,9 @@ class ContextualQueryBuilder:
             # multi-word GLOSSARY phrase that is already present in the query
             # (e.g. "calvin cycle" in "What is the Calvin cycle?" → keep as-is).
             term_in_compound = any(
-                amb_term in phrase.split() and phrase in normalised.lower()
-                for phrase in GLOSSARY
-                if " " in phrase
+                phrase in normalised.lower()
+                for phrase in self._compound_phrases
+                if amb_term in phrase.split()
             )
             if term_in_compound:
                 # The compound phrase is already meaningful; just append context

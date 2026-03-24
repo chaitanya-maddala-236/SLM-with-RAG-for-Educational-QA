@@ -92,7 +92,10 @@ class TopicMemoryManager:
         """
         Return the topic with the highest current confidence above
         ACTIVE_THRESHOLD, or ``None`` if all topics have decayed.
-        Ties are broken by frequency (more-discussed topic wins).
+
+        Tie-breaking: when two topics share the same confidence, the one that
+        has been discussed more frequently (higher ``frequency`` count) wins.
+        This is implemented by comparing ``(confidence, frequency)`` tuples.
         """
         active = [
             rec
