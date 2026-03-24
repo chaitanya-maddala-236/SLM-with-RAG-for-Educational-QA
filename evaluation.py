@@ -127,14 +127,25 @@ def faithfulness_score(
     retrieved_docs: list[Document],
 ) -> float:
     """
-    Faithfulness: estimate how much of the answer is grounded in the context.
-    Uses token overlap between answer and the combined retrieved context.
+    Faithfulness: fraction of answer tokens that are grounded in the context.
+
+    Uses *answer-token recall* – what proportion of the answer's meaningful
+    vocabulary appears in the combined retrieved context.  This avoids
+    penalising long, detailed answers for containing extra information.
     Score ∈ [0, 1].
+
+    Returns 0.0 when there are no retrieved documents (e.g. LLM Fallback
+    mode where no context was provided to the model).
     """
     if not answer or not retrieved_docs:
         return 0.0
     combined_context = " ".join(doc.page_content for doc in retrieved_docs)
-    return min(1.0, _token_overlap(answer, combined_context) * 2.5)
+    answer_tokens = _tokenise(answer)
+    context_tokens = _tokenise(combined_context)
+    if not answer_tokens:
+        return 0.0
+    covered = answer_tokens & context_tokens
+    return len(covered) / len(answer_tokens)
 
 
 def answer_relevance_score(
@@ -196,6 +207,7 @@ def compute_all_metrics(
     all_docs: list[Document],
     query_topic: str | None,
     k: int = 5,
+    mode: str = "RAG",
 ) -> dict[str, float]:
     """
     Compute and return all six evaluation metrics.
@@ -207,15 +219,27 @@ def compute_all_metrics(
         all_docs:       Full corpus (for computing recall denominator).
         query_topic:    Resolved topic name (or None).
         k:              K for precision/recall/MRR.
+        mode:           Pipeline mode ("RAG" or "LLM Fallback").  In LLM
+                        Fallback mode the model answers from its own
+                        knowledge without using the retrieved documents, so
+                        faithfulness is reported as 0.0 (no grounding
+                        context was given to the model).
 
     Returns:
         Dict mapping metric name → float score.
     """
+    # Faithfulness is not applicable in LLM Fallback mode because the answer
+    # was generated without any retrieved context being passed to the model.
+    if mode == "LLM Fallback":
+        faith = 0.0
+    else:
+        faith = faithfulness_score(answer, retrieved_docs)
+
     return {
         f"Precision@{k}": round(precision_at_k(retrieved_docs, query_topic, k), 3),
         f"Recall@{k}":    round(recall_at_k(retrieved_docs, all_docs, query_topic, k), 3),
         "MRR":            round(mean_reciprocal_rank(retrieved_docs, query_topic), 3),
-        "Faithfulness":   round(faithfulness_score(answer, retrieved_docs), 3),
+        "Faithfulness":   round(faith, 3),
         "Answer Relevance":  round(answer_relevance_score(answer, query), 3),
         "Context Relevance": round(context_relevance_score(retrieved_docs, query), 3),
     }

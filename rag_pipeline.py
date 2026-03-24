@@ -21,6 +21,7 @@ transparent from the command line and the Streamlit sidebar.
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass, field
 # from langchain.schema import Document
 from langchain_core.documents import Document
@@ -86,11 +87,30 @@ Answer:""",
 # ── Prompt template for LLM fallback (no retrieved context) ──────────────────
 LLM_FALLBACK_PROMPT = PromptTemplate(
     input_variables=["question"],
-    template="""You are a helpful educational assistant for students.
-Answer the following question clearly and simply using your knowledge.
+    template="""You are an educational assistant.
 
-Question:
-{question}
+The user asked a question: "{question}".
+
+No external documents are available. Answer based on your own knowledge.
+
+- If the question is ambiguous, provide possible interpretations.
+- Explain clearly and simply for students.
+- If unsure, indicate uncertainty rather than making up facts.
+
+Answer:""",
+)
+
+# ── Prompt template for vague / one-word queries ──────────────────────────────
+VAGUE_QUERY_PROMPT = PromptTemplate(
+    input_variables=["query"],
+    template="""You are an educational assistant.
+
+The user asked a vague question: "{query}".
+
+Provide possible interpretations and a brief explanation for each.
+If context exists, prioritize it, but do not assume unrelated topics.
+
+List at least 2-3 possible interpretations clearly and concisely for students.
 
 Answer:""",
 )
@@ -103,6 +123,43 @@ CLARIFICATION_MSG = (
     "I found the term '{term}' in your question, which could mean: {options}. "
     "Could you clarify which one you meant?"
 )
+
+# ── Pipeline-level statistics (module-level, survives across pipeline calls) ──
+_pipeline_stats: dict[str, int] = {
+    "total_queries": 0,
+    "fallback_triggers": 0,
+    "clarifications_requested": 0,
+}
+
+# ── Filler words excluded from vague-query word count ────────────────────────
+_FILLER_WORDS: frozenset[str] = frozenset({
+    "what", "is", "are", "how", "does", "do", "can", "explain", "tell",
+    "me", "about", "the", "a", "an", "of", "in", "for", "it", "its",
+    "that", "this", "please", "just", "give", "show", "describe",
+})
+
+# ── Conjunction pattern for compound-query detection ─────────────────────────
+_COMPOUND_RE = re.compile(
+    r"\b(and|also|additionally|furthermore|as well as|plus)\b", re.IGNORECASE
+)
+
+
+def _is_vague_query(query: str) -> bool:
+    """Return True if *query* is too short or contains only filler words.
+
+    A query with at most one meaningful (non-filler, >2-char) token is
+    considered vague (e.g. "cycle", "system", "it").
+    """
+    meaningful = [
+        t for t in re.findall(r"\b[a-z0-9]+\b", query.lower())
+        if t not in _FILLER_WORDS and len(t) > 2
+    ]
+    return len(meaningful) <= 1
+
+
+def _is_compound_query(query: str) -> bool:
+    """Return True if *query* contains a conjunction suggesting multiple parts."""
+    return bool(_COMPOUND_RE.search(query))
 
 
 @dataclass
@@ -288,8 +345,17 @@ class RAGPipeline:
                 break
 
         if needs_clarification:
+            _pipeline_stats["clarifications_requested"] += 1
             memory.add_turn(user_query=user_query, resolved_topic=None)
             return result
+
+        # ── Compound-query detection (log only; LLM handles both parts) ────────
+        if _is_compound_query(ctx_rewritten):
+            result.log(
+                4,
+                "Compound query detected (contains conjunction). "
+                "The model will address all parts together.",
+            )
 
         # ── Step 5: Query classification ──────────────────────────────────────
         classification = classify_query(ctx_rewritten)
@@ -384,12 +450,21 @@ class RAGPipeline:
             prompt_text = RAG_PROMPT.format(context=context, question=user_query)
             result.log(9, "Mode RAG: sending context + question to Phi-3 via Ollama …")
         else:
-            prompt_text = LLM_FALLBACK_PROMPT.format(question=user_query)
-            result.log(
-                9,
-                "Mode LLM Fallback: low retrieval score — answering directly "
-                "from Phi-3 knowledge (no retrieved context) …",
-            )
+            _pipeline_stats["fallback_triggers"] += 1
+            if _is_vague_query(user_query):
+                prompt_text = VAGUE_QUERY_PROMPT.format(query=user_query)
+                result.log(
+                    9,
+                    "Mode LLM Fallback (vague query): requesting multiple "
+                    "interpretations from Phi-3 …",
+                )
+            else:
+                prompt_text = LLM_FALLBACK_PROMPT.format(question=user_query)
+                result.log(
+                    9,
+                    "Mode LLM Fallback: low retrieval score — answering directly "
+                    "from Phi-3 knowledge (no retrieved context) …",
+                )
 
         try:
             answer = self.llm.invoke(prompt_text)
@@ -421,6 +496,16 @@ class RAGPipeline:
             all_docs=self.all_docs,
             query_topic=final_topic,
             k=self.top_k,
+            mode=result.mode,
+        )
+
+        # ── Update pipeline stats and log ─────────────────────────────────────
+        _pipeline_stats["total_queries"] += 1
+        result.tag_log(
+            "Pipeline Stats",
+            f"total={_pipeline_stats['total_queries']}, "
+            f"fallbacks={_pipeline_stats['fallback_triggers']}, "
+            f"clarifications={_pipeline_stats['clarifications_requested']}",
         )
 
         # ── Update memory and topic manager ───────────────────────────────────
