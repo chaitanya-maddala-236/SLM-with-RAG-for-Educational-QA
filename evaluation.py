@@ -16,6 +16,26 @@ import re
 from langchain.schema import Document
 
 
+# ── Shared stop-word set & tokeniser ─────────────────────────────────────────
+
+_STOP_WORDS = {
+    "the", "a", "an", "is", "it", "in", "of", "to", "and", "or",
+    "that", "this", "with", "for", "are", "was", "be", "by", "as",
+    "how", "what", "does", "do", "can", "explain",
+}
+
+
+def _tokenise(text: str) -> set[str]:
+    """Return a set of meaningful lowercase tokens from *text*."""
+    tokens = re.findall(r"\b[a-z0-9]+\b", text.lower())
+    return {t for t in tokens if t not in _STOP_WORDS and len(t) > 2}
+
+
+def _strip_topic_hint(query: str) -> str:
+    """Remove appended topic hints like ' (topic: water cycle)' from a query."""
+    return re.sub(r"\s*\(topic:[^)]*\)", "", query).strip()
+
+
 # ── Helper: simple term-overlap relevance ────────────────────────────────────
 
 def _token_overlap(text_a: str, text_b: str) -> float:
@@ -23,16 +43,8 @@ def _token_overlap(text_a: str, text_b: str) -> float:
     Compute Jaccard-like token overlap between two texts.
     Returns a float in [0, 1].
     """
-    stop = {"the", "a", "an", "is", "it", "in", "of", "to", "and", "or",
-            "that", "this", "with", "for", "are", "was", "be", "by", "as",
-            "how", "what", "does", "do", "can", "explain"}
-
-    def tokenise(text: str) -> set[str]:
-        tokens = re.findall(r"\b[a-z0-9]+\b", text.lower())
-        return {t for t in tokens if t not in stop and len(t) > 2}
-
-    a_tokens = tokenise(text_a)
-    b_tokens = tokenise(text_b)
+    a_tokens = _tokenise(text_a)
+    b_tokens = _tokenise(text_b)
     if not a_tokens or not b_tokens:
         return 0.0
     intersection = a_tokens & b_tokens
@@ -130,15 +142,23 @@ def answer_relevance_score(
     query: str,
 ) -> float:
     """
-    Answer Relevance: how directly the answer addresses the question.
-    Uses token overlap between answer and query.  Score ∈ [0, 1].
+    Answer Relevance: fraction of meaningful query terms that appear in the answer.
+
+    Uses *query-term recall* rather than Jaccard similarity so that long,
+    detailed answers are not penalised for containing extra information beyond
+    the narrow query vocabulary.  Topic-hint suffixes (e.g. "(topic: water cycle)")
+    are stripped from the query before scoring.
+    Score ∈ [0, 1].
     """
     if not answer or not query:
         return 0.0
-    overlap = _token_overlap(answer, query)
-    # Heuristic: a short, direct answer tends to have higher overlap
-    # Apply a sigmoid-like boost
-    return min(1.0, overlap * 3.0)
+    clean_query = _strip_topic_hint(query)
+    q_tokens = _tokenise(clean_query)
+    a_tokens = _tokenise(answer)
+    if not q_tokens or not a_tokens:
+        return 0.0
+    covered = q_tokens & a_tokens
+    return len(covered) / len(q_tokens)
 
 
 def context_relevance_score(
@@ -146,14 +166,25 @@ def context_relevance_score(
     query: str,
 ) -> float:
     """
-    Context Relevance: average semantic overlap of retrieved docs with the query.
+    Context Relevance: average fraction of query terms covered by each retrieved doc.
+
+    Uses *query-term recall per document* rather than Jaccard similarity so that
+    rich, long documents are not down-scored for containing extra content.
+    Topic-hint suffixes are stripped from the query before scoring.
     Score ∈ [0, 1].
     """
     if not retrieved_docs or not query:
         return 0.0
-    scores = [_token_overlap(doc.page_content, query) for doc in retrieved_docs]
-    avg = sum(scores) / len(scores)
-    return min(1.0, avg * 4.0)
+    clean_query = _strip_topic_hint(query)
+    q_tokens = _tokenise(clean_query)
+    if not q_tokens:
+        return 0.0
+    scores = []
+    for doc in retrieved_docs:
+        d_tokens = _tokenise(doc.page_content)
+        covered = q_tokens & d_tokens
+        scores.append(len(covered) / len(q_tokens))
+    return sum(scores) / len(scores)
 
 
 # ── Main evaluation runner ────────────────────────────────────────────────────
