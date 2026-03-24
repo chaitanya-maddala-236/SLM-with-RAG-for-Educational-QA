@@ -20,5 +20,8 @@ streamlit>=1.35.0
 # Hybrid search — BM25 keyword retrieval
 rank-bm25>=0.3.1
 
+# Token counting (Phi-3 compatible tokenizer approximation)
+tiktoken>=0.7.0
+
 # Utilities
 numpy>=1.26.0

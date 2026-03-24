@@ -29,6 +29,24 @@ from langchain_community.llms import Ollama
 from langchain_core.prompts import PromptTemplate
 from langchain_community.vectorstores import Chroma
 
+# ── Token counting (tiktoken with graceful fallback) ──────────────────────────
+try:
+    import tiktoken as _tiktoken
+    _TOKENIZER = _tiktoken.get_encoding("cl100k_base")
+
+    def _count_tokens(text: str) -> int:
+        """Count tokens using tiktoken cl100k_base encoding (approximate for Phi-3)."""
+        return len(_TOKENIZER.encode(text))
+
+except Exception:  # ImportError, ConnectionError, or any other init failure
+    def _count_tokens(text: str) -> int:  # type: ignore[misc]
+        """Approximate token count by word splitting (tiktoken unavailable).
+
+        Note: word-split counts typically underestimate actual token counts
+        (English text averages ~1.3–1.5 tokens per word).
+        """
+        return len(text.split())
+
 from context_memory import ConversationMemory
 from topic_memory_manager import TopicMemoryManager
 from contextual_query_builder import ContextualQueryBuilder
@@ -65,8 +83,22 @@ Question: {question}
 Answer:""",
 )
 
+# ── Prompt template for LLM fallback (no retrieved context) ──────────────────
+LLM_FALLBACK_PROMPT = PromptTemplate(
+    input_variables=["question"],
+    template="""You are a helpful educational assistant for students.
+Answer the following question clearly and simply using your knowledge.
+
+Question:
+{question}
+
+Answer:""",
+)
+
 TOP_K = 5          # number of documents to return after reranking
 RETRIEVAL_CANDIDATES = 20   # wider pool fetched before reranking
+# Similarity threshold: scores at or above this use RAG mode; below → LLM Fallback
+RAG_SIMILARITY_THRESHOLD: float = 0.6
 CLARIFICATION_MSG = (
     "I found the term '{term}' in your question, which could mean: {options}. "
     "Could you clarify which one you meant?"
@@ -88,9 +120,18 @@ class PipelineResult:
     answer: str
     metrics: dict[str, float]
     step_log: list[str] = field(default_factory=list)
+    retrieval_score: float = 0.0
+    mode: str = "RAG"
+    token_counts: dict[str, int] = field(default_factory=dict)
 
     def log(self, step: int, message: str) -> None:
         entry = f"[Step {step:>2}] {message}"
+        self.step_log.append(entry)
+        print(entry)
+
+    def tag_log(self, tag: str, message: str) -> None:
+        """Emit a labelled console log line and record it in step_log."""
+        entry = f"[{tag}] {message}"
         self.step_log.append(entry)
         print(entry)
 
@@ -158,10 +199,14 @@ class RAGPipeline:
             retrieved_docs=[],
             answer="",
             metrics={},
+            retrieval_score=0.0,
+            mode="RAG",
+            token_counts={},
         )
 
         # ── Step 1: Receive question ──────────────────────────────────────────
         result.log(1, f"User question received: '{user_query}'")
+        result.tag_log("Query", user_query)
 
         # ── Step 2: Conversation memory ───────────────────────────────────────
         last_topic = memory.get_last_topic()
@@ -304,6 +349,20 @@ class RAGPipeline:
         )
         result.log(7, f"Retrieved {len(retrieved)} document(s) after reranking.")
 
+        # ── Determine retrieval similarity score and pipeline mode ────────────
+        try:
+            score_hits = self.vector_store.similarity_search_with_relevance_scores(
+                retrieval_query, k=1
+            )
+            top_score = score_hits[0][1] if score_hits else 0.0
+        except Exception:
+            top_score = 0.0
+
+        result.retrieval_score = top_score
+        result.mode = "RAG" if top_score >= RAG_SIMILARITY_THRESHOLD else "LLM Fallback"
+        result.tag_log("Retrieval Score", f"{top_score:.4f} (threshold: {RAG_SIMILARITY_THRESHOLD})")
+        result.tag_log("Mode", result.mode)
+
         # ── Step 8: Top-K document selection ──────────────────────────────────
         result.retrieved_docs = retrieved[: self.top_k]
         result.log(8, f"Selected {len(result.retrieved_docs)} top-K documents:")
@@ -317,12 +376,20 @@ class RAGPipeline:
             )
 
         # ── Step 9: SLM generation ────────────────────────────────────────────
-        context = "\n\n".join(
-            f"[Doc {i+1}] {doc.page_content}"
-            for i, doc in enumerate(result.retrieved_docs)
-        )
-        prompt_text = RAG_PROMPT.format(context=context, question=user_query)
-        result.log(9, "Sending context + question to Phi-3 via Ollama …")
+        if result.mode == "RAG":
+            context = "\n\n".join(
+                f"[Doc {i+1}] {doc.page_content}"
+                for i, doc in enumerate(result.retrieved_docs)
+            )
+            prompt_text = RAG_PROMPT.format(context=context, question=user_query)
+            result.log(9, "Mode RAG: sending context + question to Phi-3 via Ollama …")
+        else:
+            prompt_text = LLM_FALLBACK_PROMPT.format(question=user_query)
+            result.log(
+                9,
+                "Mode LLM Fallback: low retrieval score — answering directly "
+                "from Phi-3 knowledge (no retrieved context) …",
+            )
 
         try:
             answer = self.llm.invoke(prompt_text)
@@ -331,6 +398,20 @@ class RAGPipeline:
 
         result.answer = answer.strip()
         result.log(10, f"Answer generated ({len(result.answer)} chars).")
+
+        # ── Token counting ────────────────────────────────────────────────────
+        input_tokens = _count_tokens(prompt_text)
+        output_tokens = _count_tokens(result.answer)
+        total_tokens = input_tokens + output_tokens
+        result.token_counts = {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": total_tokens,
+        }
+        result.tag_log(
+            "Tokens Used",
+            f"input={input_tokens}, output={output_tokens}, total={total_tokens}",
+        )
 
         # ── Step 10: Evaluation metrics ───────────────────────────────────────
         result.metrics = compute_all_metrics(
