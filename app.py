@@ -113,10 +113,27 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
         # Key facts at a glance
         topic = result_meta.get("topic")
         subject = result_meta.get("subject")
+        mode = result_meta.get("mode")
+        retrieval_score = result_meta.get("retrieval_score")
+        token_counts = result_meta.get("token_counts") or {}
+
         if topic or subject:
             c1, c2 = st.columns(2)
             c1.metric("Topic", topic or "—")
             c2.metric("Subject", subject or "—")
+
+        if mode:
+            mode_color = "🟢" if mode == "RAG" else "🟠"
+            score_str = (
+                f"  _(score: {retrieval_score:.3f})_" if retrieval_score is not None else ""
+            )
+            st.markdown(f"{mode_color} **Mode:** {mode}{score_str}")
+
+        if token_counts:
+            tc1, tc2, tc3 = st.columns(3)
+            tc1.metric("Input tokens", token_counts.get("input_tokens", "—"))
+            tc2.metric("Output tokens", token_counts.get("output_tokens", "—"))
+            tc3.metric("Total tokens", token_counts.get("total_tokens", "—"))
 
         if result_meta.get("clarification"):
             st.warning(f"⚠️ {result_meta['clarification']}")
@@ -124,6 +141,20 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
         # Step-by-step log inside a scrollable container
         with st.container(height=300):
             for entry in step_log:
+                # Custom tag entries (e.g. [Query], [Mode], [Tokens Used])
+                if entry.startswith("[Query]"):
+                    st.markdown(f"🔍 `{entry}`")
+                    continue
+                if entry.startswith("[Retrieval Score]"):
+                    st.markdown(f"📏 `{entry}`")
+                    continue
+                if entry.startswith("[Mode]"):
+                    st.markdown(f"🏷️ `{entry}`")
+                    continue
+                if entry.startswith("[Tokens Used]"):
+                    st.markdown(f"🔢 `{entry}`")
+                    continue
+
                 try:
                     step_num = int(entry.split("]")[0].replace("[Step", "").strip())
                 except (ValueError, IndexError):
@@ -220,6 +251,9 @@ def render_chat_column(pipeline: RAGPipeline) -> None:
         "subject": result.detected_subject,
         "retrieved_docs": result.retrieved_docs,
         "clarification": result.clarification_message,
+        "mode": result.mode,
+        "retrieval_score": result.retrieval_score,
+        "token_counts": result.token_counts,
     }
 
     # Build assistant message
