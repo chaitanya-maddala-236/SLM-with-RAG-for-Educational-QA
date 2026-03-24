@@ -25,6 +25,7 @@ st.set_page_config(
 
 # ── Lazy imports (after set_page_config) ─────────────────────────────────────
 from context_memory import ConversationMemory
+from topic_memory_manager import TopicMemoryManager
 from retriever import build_vector_store
 from rag_pipeline import RAGPipeline
 from evaluation import format_metrics_table
@@ -51,6 +52,8 @@ def init_session_state() -> None:
         st.session_state.chat_history = []
     if "memory_data" not in st.session_state:
         st.session_state.memory_data = []          # serialised ConversationMemory
+    if "topic_manager_data" not in st.session_state:
+        st.session_state.topic_manager_data = {}   # serialised TopicMemoryManager
     if "last_step_log" not in st.session_state:
         st.session_state.last_step_log = []        # step log from latest pipeline run
     if "last_metrics" not in st.session_state:
@@ -150,13 +153,16 @@ def render_chat(pipeline: RAGPipeline) -> None:
 
     # Rebuild memory from serialised session state
     memory = ConversationMemory.from_list(st.session_state.memory_data, max_turns=5)
+    topic_manager = TopicMemoryManager.from_dict(st.session_state.topic_manager_data)
 
     # Run pipeline
     with st.spinner("🤔 Thinking…"):
-        result = pipeline.run(user_query=user_input, memory=memory)
+        result = pipeline.run(user_query=user_input, memory=memory,
+                              topic_manager=topic_manager)
 
     # Persist memory back to session state
     st.session_state.memory_data = memory.to_list()
+    st.session_state.topic_manager_data = topic_manager.to_dict()
 
     # Persist step log and metadata
     st.session_state.last_step_log = result.step_log
@@ -225,6 +231,7 @@ def render_controls() -> None:
         if st.button("🗑️ Clear Conversation", use_container_width=True):
             st.session_state.chat_history = []
             st.session_state.memory_data = []
+            st.session_state.topic_manager_data = {}
             st.session_state.last_step_log = []
             st.session_state.last_metrics = {}
             st.session_state.last_result_meta = {}

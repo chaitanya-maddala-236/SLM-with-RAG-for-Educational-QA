@@ -12,6 +12,7 @@ Usage:
 from retriever import build_vector_store
 from rag_pipeline import RAGPipeline
 from context_memory import ConversationMemory
+from topic_memory_manager import TopicMemoryManager
 from evaluation import format_metrics_table
 
 DEMO_QUERIES = [
@@ -39,6 +40,7 @@ def run_demo() -> None:
     pipeline = RAGPipeline(vector_store=vector_store, model_name="phi3", top_k=5)
 
     memory = ConversationMemory(max_turns=5)
+    topic_manager = TopicMemoryManager()
 
     all_metrics: list[dict] = []
 
@@ -47,7 +49,8 @@ def run_demo() -> None:
         print(f"  DEMO QUERY {i}/{len(DEMO_QUERIES)}: '{query}'")
         print(SEPARATOR)
 
-        result = pipeline.run(user_query=query, memory=memory)
+        result = pipeline.run(user_query=query, memory=memory,
+                              topic_manager=topic_manager)
 
         if result.clarification_needed:
             print(f"\n  ⚠ Clarification requested: {result.clarification_message}")
