@@ -13,7 +13,7 @@ Metrics implemented:
 """
 
 import re
-from langchain.schema import Document
+from langchain_core.documents import Document
 
 
 # ── Shared stop-word set & tokeniser ─────────────────────────────────────────

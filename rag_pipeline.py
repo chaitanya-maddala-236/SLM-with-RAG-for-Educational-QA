@@ -22,9 +22,11 @@ transparent from the command line and the Streamlit sidebar.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from langchain.schema import Document
+# from langchain.schema import Document
+from langchain_core.documents import Document
 from langchain_community.llms import Ollama
-from langchain.prompts import PromptTemplate
+# from langchain.prompts import PromptTemplate
+from langchain_core.prompts import PromptTemplate
 from langchain_community.vectorstores import Chroma
 
 from context_memory import ConversationMemory

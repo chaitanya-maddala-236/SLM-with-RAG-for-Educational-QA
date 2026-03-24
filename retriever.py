@@ -17,7 +17,7 @@ import hashlib
 from collections import defaultdict
 
 from langchain_community.vectorstores import Chroma
-from langchain.schema import Document
+from langchain_core.documents import Document
 from embeddings import get_bge_embeddings
 from data_loader import get_texts_and_metadatas
 
