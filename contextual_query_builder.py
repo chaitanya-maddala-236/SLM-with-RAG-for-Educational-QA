@@ -90,11 +90,25 @@ TOPIC_KEYWORD_WEIGHTS: dict[str, dict[str, float]] = {
         "glucose": 3.0, "sunlight": 2.5, "oxygen": 2.0, "calvin": 3.0,
         "rubisco": 3.0, "stomata": 3.0, "thylakoid": 3.0, "stroma": 3.0,
         "light reaction": 3.0,
+        "plant": 1.0, "plants": 1.0, "leaf": 1.5, "leaves": 1.5,
+        "algae": 1.5, "photosynthetic": 2.0,
     },
 }
 
 # Minimum weighted score required to consider a topic "high confidence"
 TOPIC_SWITCH_THRESHOLD: float = 2.0
+
+# Minimum keyword-overlap similarity (0–1) between query and memory topic that
+# qualifies the query as being about that topic.  0.0 means that *any* keyword
+# match (however small) is sufficient to keep the topic; only a score of
+# *exactly* zero triggers the deeper unknown-domain analysis.
+TOPIC_SIMILARITY_FLOOR: float = 0.0
+
+# Minimum word length to consider a token "domain-specific" when no topic
+# keyword matches are found.  Words of this length or longer that do not
+# appear in *any* topic keyword vocabulary are treated as out-of-scope domain
+# signals (e.g. "nervous", "muscle") rather than common English filler words.
+MIN_DOMAIN_SPECIFIC_WORD_LENGTH: int = 5
 
 # Divisor used to normalise a topic score into a [0, 1] confidence value.
 # A single strong keyword (e.g. "chlorophyll" = 3.0) divided by this yields
@@ -207,7 +221,206 @@ class TopicConfidenceScorer:
         )
 
 
-# ── 3. Ambiguity Resolver ─────────────────────────────────────────────────────
+# ── 3. Topic Shift Detector ───────────────────────────────────────────────────
+
+class TopicShiftDetector:
+    """
+    Detects whether the current query signals a topic shift away from the last
+    conversation topic using keyword-overlap as a lightweight proxy for semantic
+    similarity.
+
+    This prevents context contamination such as:
+      - "nervous system" (after photosynthesis) → "nervous photosynthesis"
+      - "water" query  (after photosynthesis)   → "water photosynthesis"
+
+    Algorithm
+    ---------
+    1. Compute keyword-overlap similarity between the full query and the memory
+       topic.  Any match (score > TOPIC_SIMILARITY_FLOOR) means the query
+       is still about that topic → no shift.
+    2. Extract *non-ambiguous* content words (exclude EXTENDED_AMBIGUOUS_TERMS
+       and common stop-words).
+    3. If no non-ambiguous content words remain, defer to memory (cannot tell).
+    4. Check content words against every topic's keyword vocabulary:
+         - Match in a DIFFERENT topic → shift (clear domain change).
+         - Match in the SAME topic    → no shift.
+    5. No topic keyword match at all AND at least one domain-specific word
+       (length ≥ 5 chars) → shift (unknown / out-of-scope domain).
+    """
+
+    # Words to exclude when extracting content words for shift detection.
+    # Superset of English stop-words plus common educational question starters
+    # and instruction/modifier words that are not domain-specific.
+    _CONTENT_STOPWORDS: frozenset = frozenset({
+        # Core stop-words
+        "what", "is", "are", "the", "a", "an", "how", "does", "do",
+        "explain", "tell", "me", "about", "why", "where", "when",
+        "which", "who", "did", "was", "were", "be", "been", "have",
+        "has", "had", "will", "would", "could", "should", "may",
+        "might", "can", "shall", "give", "describe", "define",
+        "meaning", "means", "mean", "also", "more", "and", "or",
+        "its", "in", "of", "to", "for", "with", "from", "by",
+        "than", "not", "just", "very", "much", "many", "some",
+        "get", "got", "let", "put", "use", "see",
+        # Common instruction / modifier words (not domain-specific)
+        "detail", "details", "briefly", "simply", "clearly", "quickly",
+        "shortly", "deeply", "broadly", "fully", "mostly", "mainly",
+        "purely", "exactly", "roughly", "generally", "basically",
+        "please", "example", "examples", "concept", "summary",
+        "overview", "context", "answer", "answers", "further",
+        "basic", "simple", "brief", "clear", "quick", "short",
+        "class", "topic", "related", "known", "using", "often",
+        "called", "named", "given", "found", "taken", "forms",
+        "works", "make", "makes", "happen", "result", "results",
+        "helps", "takes", "gives", "shows", "comes", "goes",
+    })
+
+    def get_content_words(
+        self,
+        query: str,
+        exclude_terms: set[str] | None = None,
+    ) -> list[str]:
+        """
+        Extract meaningful content words from *query*.
+
+        Args:
+            query:         Normalised (lowercase) query string.
+            exclude_terms: Additional tokens to exclude (e.g. ambiguous terms).
+
+        Returns:
+            List of lowercase content-word tokens.
+        """
+        excluded = self._CONTENT_STOPWORDS | (exclude_terms or set())
+        tokens = re.findall(r"\b[a-z]+\b", query.lower())
+        return [t for t in tokens if t not in excluded and len(t) > 2]
+
+    def compute_similarity(self, query: str, topic: str) -> float:
+        """
+        Compute keyword-overlap similarity between *query* and *topic*.
+
+        Scans the query for keywords from TOPIC_KEYWORD_WEIGHTS[topic] and
+        returns the sum of matched weights divided by the maximum possible
+        weight for that topic.
+
+        Returns a float in [0, 1].  0.0 indicates no shared keywords.
+        """
+        kw_map = TOPIC_KEYWORD_WEIGHTS.get(topic, {})
+        if not kw_map:
+            return 0.0
+        query_lower = query.lower()
+        matched = sum(w for kw, w in kw_map.items() if kw in query_lower)
+        max_w = sum(kw_map.values())
+        return min(1.0, matched / max_w) if max_w > 0 else 0.0
+
+    def is_topic_shift(
+        self,
+        query: str,
+        last_topic: str | None,
+        ambiguous_terms: list[str],
+    ) -> tuple[bool, str]:
+        """
+        Decide whether *query* represents a topic shift away from *last_topic*.
+
+        Args:
+            query:           Normalised query string.
+            last_topic:      Most recently resolved topic from conversation memory.
+            ambiguous_terms: Ambiguous tokens already identified in the query.
+
+        Returns:
+            ``(is_shift, reason)`` where *reason* is a short diagnostic string.
+        """
+        if not last_topic:
+            return False, "no_memory"
+
+        # Step 1: Direct similarity between query and memory topic
+        if self.compute_similarity(query, last_topic) > TOPIC_SIMILARITY_FLOOR:
+            return False, "query_matches_memory_topic"
+
+        # Step 2: Extract non-ambiguous content words
+        content_words = self.get_content_words(
+            query, exclude_terms=set(ambiguous_terms)
+        )
+        if not content_words:
+            # Only ambiguous terms and stop-words — cannot determine shift
+            return False, "no_unambiguous_content"
+
+        # Step 3: Compare content words against every topic's keyword vocabulary
+        for topic, kw_map in TOPIC_KEYWORD_WEIGHTS.items():
+            topic_kw_tokens: set[str] = {
+                tok for kw in kw_map for tok in kw.split()
+            }
+            if any(cw in topic_kw_tokens for cw in content_words):
+                if topic != last_topic:
+                    return True, f"content_matches_different_topic:{topic}"
+                return False, "content_matches_memory_topic"
+
+        # Step 4: No topic keyword match — flag shift only for domain-specific words
+        if any(len(cw) >= MIN_DOMAIN_SPECIFIC_WORD_LENGTH for cw in content_words):
+            return True, "unknown_domain_words"
+
+        return False, "only_short_generic_words"
+
+    def would_contaminate(
+        self,
+        query: str,
+        resolved_topic: str,
+        amb_term: str,
+    ) -> bool:
+        """
+        Return ``True`` if substituting *amb_term* with *resolved_topic* in
+        *query* would produce a semantically incoherent phrase.
+
+        Examples of incoherent substitutions this prevents:
+          - "nervous system"  → "nervous photosynthesis"   (amb_term="system")
+          - "water"  [query]  → "water photosynthesis"
+
+        Logic
+        -----
+        1. Get non-ambiguous content words (excluding *amb_term*).
+        2. If none, substitution is safe (query is fully ambiguous).
+        3. For each content word:
+             a. If it belongs to a DIFFERENT topic's keywords → contamination.
+             b. If it belongs to NO known topic AND is ≥ 5 chars → contamination.
+
+        Args:
+            query:          Normalised query string.
+            resolved_topic: The topic about to be substituted in.
+            amb_term:       The ambiguous token being replaced.
+
+        Returns:
+            ``True`` if the substitution should be blocked.
+        """
+        content_words = self.get_content_words(query, exclude_terms={amb_term})
+        if not content_words:
+            return False
+
+        resolved_kw_tokens: set[str] = {
+            tok
+            for kw in TOPIC_KEYWORD_WEIGHTS.get(resolved_topic, {})
+            for tok in kw.split()
+        }
+
+        for cw in content_words:
+            in_resolved = cw in resolved_kw_tokens
+            if in_resolved:
+                continue  # Word belongs to the resolved topic — safe
+
+            # Check if it belongs to a different topic
+            for topic, kw_map in TOPIC_KEYWORD_WEIGHTS.items():
+                if topic == resolved_topic:
+                    continue
+                other_kw_tokens = {tok for kw in kw_map for tok in kw.split()}
+                if cw in other_kw_tokens:
+                    return True  # Belongs to a different topic → contamination
+
+            # Word not in any topic — flag if domain-specific (≥ MIN_DOMAIN_SPECIFIC_WORD_LENGTH chars)
+            if len(cw) >= MIN_DOMAIN_SPECIFIC_WORD_LENGTH:
+                return True
+
+        return False
+
+
+# ── 4. Ambiguity Resolver ─────────────────────────────────────────────────────
 
 @dataclass
 class AmbiguityResult:
@@ -217,6 +430,8 @@ class AmbiguityResult:
     resolved_topic: str | None    # final resolved topic (or None)
     resolution_source: str        # "query_signals" | "memory" | "unresolved"
     confidence: float             # resolution confidence  ∈ [0, 1]
+    shift_detected: bool = False  # True when a topic shift was detected
+    shift_reason: str = ""        # short diagnostic string from TopicShiftDetector
 
 
 class AmbiguityResolver:
@@ -228,13 +443,16 @@ class AmbiguityResolver:
     1. High-confidence topic from weighted keyword scoring → use directly.
     2. In-query disambiguation signals from DISAMBIGUATION_SIGNALS
        (e.g. 'move' near 'cycle' → 'bicycle').
-    3. Last topic from conversation memory — if the ambiguous term can
-       plausibly refer to that topic.
+    3. Conversation memory — **only** when TopicShiftDetector confirms the query
+       is still about the same topic (prevents "nervous photosynthesis" merges).
     4. Unresolved — caller may request clarification from the user.
 
     Handles single-word ambiguous terms (cycle, cell, …) and pronouns
     (it, this, that) that should always be resolved via memory.
     """
+
+    def __init__(self) -> None:
+        self._shift_detector = TopicShiftDetector()
 
     def resolve(
         self,
@@ -293,19 +511,48 @@ class AmbiguityResolver:
                         confidence=0.85,
                     )
 
-        # Priority 3: Conversation memory
+        # Priority 3: Conversation memory — only when no topic shift is detected.
+        # Exception: pronouns (it/this/that) always refer to the last topic;
+        # skip shift detection for pronoun-only ambiguous terms.
         last_topic = memory.get_last_topic()
         if last_topic:
-            first_term = ambiguous_found[0]
-            possible_topics = EXTENDED_AMBIGUOUS_TERMS.get(first_term, [])
-            # Accept memory if the term can refer to that topic, or term has no
-            # specific restrictions (e.g. pronouns with empty list)
-            if not possible_topics or last_topic in possible_topics:
+            _PRONOUNS = {"it", "this", "that", "they", "them"}
+            pronoun_only = all(t in _PRONOUNS for t in ambiguous_found)
+
+            if pronoun_only:
                 return AmbiguityResult(
                     ambiguous_terms=ambiguous_found,
                     resolved_topic=last_topic,
                     resolution_source="memory",
-                    confidence=0.75,
+                    confidence=0.8,
+                )
+
+            is_shift, shift_reason = self._shift_detector.is_topic_shift(
+                query, last_topic, ambiguous_found
+            )
+            if not is_shift:
+                first_term = ambiguous_found[0]
+                possible_topics = EXTENDED_AMBIGUOUS_TERMS.get(first_term, [])
+                # Accept memory if the term can refer to that topic, or term has no
+                # specific restrictions (e.g. pronouns with empty list)
+                if not possible_topics or last_topic in possible_topics:
+                    return AmbiguityResult(
+                        ambiguous_terms=ambiguous_found,
+                        resolved_topic=last_topic,
+                        resolution_source="memory",
+                        confidence=0.75,
+                        shift_detected=False,
+                        shift_reason=shift_reason,
+                    )
+            else:
+                # Topic shift detected — do not contaminate query with memory topic
+                return AmbiguityResult(
+                    ambiguous_terms=ambiguous_found,
+                    resolved_topic=None,
+                    resolution_source="unresolved",
+                    confidence=0.0,
+                    shift_detected=True,
+                    shift_reason=shift_reason,
                 )
 
         # Priority 4: Unresolved
@@ -317,7 +564,7 @@ class AmbiguityResolver:
         )
 
 
-# ── 4. Contextual Query Builder ───────────────────────────────────────────────
+# ── 5. Contextual Query Builder ───────────────────────────────────────────────
 
 @dataclass
 class ContextualQueryResult:
@@ -356,6 +603,7 @@ class ContextualQueryBuilder:
         self._normalizer = QueryNormalizer()
         self._scorer = TopicConfidenceScorer()
         self._resolver = AmbiguityResolver()
+        self._shift_detector = TopicShiftDetector()
         # Pre-compute multi-word GLOSSARY phrases that contain an ambiguous term.
         # Used in _rewrite to skip substitution when the term is part of a
         # meaningful compound phrase already in the query (e.g. "calvin cycle").
@@ -426,6 +674,7 @@ class ContextualQueryBuilder:
             confidence=confidence,
             ambiguity=ambiguity,
             last_topic=last_topic,
+            normalised_query=normalised,
             notes=notes,
         )
 
@@ -456,6 +705,7 @@ class ContextualQueryBuilder:
         confidence: TopicConfidenceResult,
         ambiguity: AmbiguityResult,
         last_topic: str | None,
+        normalised_query: str,
         notes: list[str],
     ) -> tuple[str | None, bool]:
         """
@@ -503,8 +753,27 @@ class ContextualQueryBuilder:
             )
             return confidence.top_topic, True
 
-        # Rule 5: Fall back to memory
+        # Rule 5: Fall back to memory — but only when no topic shift was detected.
+        # If the AmbiguityResolver already detected a shift, honour it.
+        # If there were no ambiguous terms, run a direct shift check here.
         if last_topic:
+            if ambiguity.shift_detected:
+                notes.append(
+                    f"Topic shift detected ({ambiguity.shift_reason}); "
+                    "clearing memory context to prevent contamination."
+                )
+                return None, True
+            # For queries with no ambiguous terms, run an independent shift check
+            if not ambiguity.ambiguous_terms:
+                is_shift, shift_reason = self._shift_detector.is_topic_shift(
+                    normalised_query, last_topic, []
+                )
+                if is_shift:
+                    notes.append(
+                        f"Topic shift detected ({shift_reason}); "
+                        "clearing memory context to prevent contamination."
+                    )
+                    return None, True
             notes.append(f"No topic signal; retaining memory topic: '{last_topic}'")
             return last_topic, False
 
@@ -554,6 +823,15 @@ class ContextualQueryBuilder:
 
         # ── Rule 1: Ambiguous term substitution ───────────────────────────────
         if amb_term and amb_term in EXTENDED_AMBIGUOUS_TERMS:
+            # Rewrite safety: block substitutions that would create semantically
+            # incoherent phrases such as "nervous photosynthesis".
+            if self._shift_detector.would_contaminate(
+                normalised, resolved_topic, amb_term
+            ):
+                # Skip substitution — append as a soft context hint instead
+                if resolved_topic.lower() not in normalised.lower():
+                    return f"{original} (context: {resolved_topic})"
+                return original
             # Guard: skip substitution when the ambiguous term is part of a
             # multi-word GLOSSARY phrase that is already present in the query
             # (e.g. "calvin cycle" in "What is the Calvin cycle?" → keep as-is).

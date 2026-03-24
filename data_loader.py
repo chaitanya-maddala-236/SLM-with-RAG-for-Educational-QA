@@ -199,3 +199,52 @@ def get_texts_and_metadatas() -> tuple[list[str], list[dict]]:
         for doc in EDUCATIONAL_DOCUMENTS
     ]
     return texts, metadatas
+
+
+def get_chunked_texts_and_metadatas(
+    chunk_size: int = 400,
+    chunk_overlap: int = 50,
+) -> tuple[list[str], list[dict]]:
+    """
+    Return (texts, metadatas) after splitting each document into smaller chunks
+    using a RecursiveCharacterTextSplitter.
+
+    Chunking improves retrieval precision for long documents by ensuring that
+    each vector-store entry covers a focused concept rather than a broad topic.
+
+    Args:
+        chunk_size:    Maximum number of characters per chunk (default 400).
+        chunk_overlap: Number of overlapping characters between consecutive
+                       chunks so that context at chunk boundaries is not lost
+                       (default 50).
+
+    Returns:
+        Two parallel lists:
+          - texts:     The chunked text strings.
+          - metadatas: Corresponding metadata dicts (topic, subject, grade,
+                       plus ``chunk_index`` and ``source_doc_index``).
+    """
+    from langchain.text_splitter import RecursiveCharacterTextSplitter
+
+    splitter = RecursiveCharacterTextSplitter(
+        chunk_size=chunk_size,
+        chunk_overlap=chunk_overlap,
+        separators=["\n\n", "\n", ". ", ", ", " ", ""],
+    )
+
+    chunked_texts: list[str] = []
+    chunked_metadatas: list[dict] = []
+
+    for doc_idx, doc in enumerate(EDUCATIONAL_DOCUMENTS):
+        chunks = splitter.split_text(doc["text"])
+        for chunk_idx, chunk in enumerate(chunks):
+            chunked_texts.append(chunk)
+            chunked_metadatas.append({
+                "subject": doc["subject"],
+                "topic": doc["topic"],
+                "grade": doc["grade"],
+                "chunk_index": chunk_idx,
+                "source_doc_index": doc_idx,
+            })
+
+    return chunked_texts, chunked_metadatas

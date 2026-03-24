@@ -51,6 +51,8 @@ def init_session_state() -> None:
         st.session_state.chat_history = []
     if "memory_data" not in st.session_state:
         st.session_state.memory_data = []
+    if "topic_manager_data" not in st.session_state:
+        st.session_state.topic_manager_data = {"turn": 0, "registry": {}}
     if "last_step_log" not in st.session_state:
         st.session_state.last_step_log = []
     if "last_metrics" not in st.session_state:
@@ -67,6 +69,7 @@ def render_controls() -> None:
         if st.button("🗑️ Clear Conversation", use_container_width=True):
             st.session_state.chat_history = []
             st.session_state.memory_data = []
+            st.session_state.topic_manager_data = {"turn": 0, "registry": {}}
             st.session_state.last_step_log = []
             st.session_state.last_metrics = {}
             st.session_state.last_result_meta = {}
