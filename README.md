@@ -11,6 +11,7 @@
 - [Architecture Overview](#-architecture-overview)
 - [Pipeline — Step by Step](#-pipeline--step-by-step)
 - [Component Deep Dives](#-component-deep-dives)
+- [Retrieval Quality Improvements](#-retrieval-quality-improvements)
 - [Tech Stack & Why Each Tool Was Chosen](#-tech-stack--why-each-tool-was-chosen)
 - [Knowledge Base](#-knowledge-base)
 - [Evaluation Metrics](#-evaluation-metrics)
@@ -392,6 +393,72 @@ Active Topic Threshold = 0.30
 
 ---
 
+## 🚀 Retrieval Quality Improvements
+
+These improvements were added to increase retrieval precision and faithfulness when scaling the document corpus to thousands of educational documents while keeping token usage low.
+
+### 1 — Query Rewriting
+
+Before hitting the vector store, short or vague queries are expanded into more descriptive search strings using a lightweight prompt-based rewrite step. This helps BGE embeddings find the right chunks even when the original query is ambiguous.
+
+| Original query | Rewritten query |
+|---|---|
+| `"cycle"` | `"Explain the water cycle including evaporation, condensation, and precipitation"` |
+| `"sin cos"` | `"Explain sine, cosine and tangent in trigonometry right-angle triangles"` |
+| `"dna"` | `"Describe the structure and role of DNA in genetics and heredity"` |
+
+The rewrite is applied by `ContextualQueryBuilder` before the query reaches the retriever.  The original query is always preserved for logging and fallback.
+
+### 2 — Post-Retrieval Reranking
+
+After vector retrieval collects the top-20 candidates, a lightweight **token-overlap reranker** scores each candidate against the (rewritten) query.  A topic-match bonus is added for documents whose metadata `topic` field matches the resolved topic, then only the best 3–5 chunks are forwarded to the Phi-3 model.
+
+```
+Vector search (top-20 candidates)
+       │
+       ▼
+Reranker — score = token_overlap(query, doc) + topic_bonus (0.3 if topic matches)
+       │
+       ▼
+Top-5 highest-scoring chunks → Phi-3 prompt
+```
+
+Key constants (tunable in `retriever.py`):
+
+```python
+TOPIC_MATCH_BONUS        = 0.3   # Extra score for topic-matching docs
+CANDIDATE_POOL_MULTIPLIER = 4    # 4× pool before reranking
+```
+
+### 3 — Improved Chunking Strategy
+
+Documents are split with `RecursiveCharacterTextSplitter` before embedding so that each chunk covers one focused concept.
+
+```python
+chunk_size    = 400   # tokens — balances context completeness and precision
+chunk_overlap = 50    # tokens — prevents concepts from being cut at chunk edges
+```
+
+These values ensure that long documents (e.g. multi-section biology articles) don't dilute retrieval relevance while still preserving sentence continuity across chunk boundaries.
+
+### 4 — Pipeline Logging for Research Evaluation
+
+Every query emits a structured log to the console (and to the Streamlit right panel as tagged entries) so retrieval quality can be monitored and tuned:
+
+```
+[Query]          original_query   : "what is sin"
+[Query]          rewritten_query  : "Explain the sine function in trigonometry"
+[Mode]           retrieval_mode   : RAG | LLM Fallback
+[Retrieval]      similarity scores: [0.87, 0.83, 0.79, 0.71, 0.68]
+[Reranker]       reranker scores  : [0.91, 0.85, 0.80, 0.73, 0.61]
+[Tokens Used]    prompt + context : 412 tokens
+[Pipeline Stats] top_k=5, docs retrieved=20, reranked to=5
+```
+
+These log tags are consumed by `PipelineResult.tag_log` and rendered with icons in the Streamlit right panel (`app.py`).
+
+---
+
 ## ⚙️ Tech Stack & Why Each Tool Was Chosen
 
 ### LLM — Phi-3 via Ollama
@@ -471,7 +538,9 @@ cosine similarity = 0.94  ← semantically similar!
 
 ## 📚 Knowledge Base
 
-14 documents across 4 topics, manually curated for educational clarity:
+14 core documents across 4 original topics, plus **500+ extended documents** across 18 actively classified topics (and 150+ total topics across the full corpus):
+
+**Core topics (original):**
 
 ```
 ┌─────────────────┬──────────────────────────────┬─────────┬───────────┐
@@ -482,6 +551,30 @@ cosine similarity = 0.94  ← semantically similar!
 │ Bicycle         │ Transportation, Physics       │ 5–9     │ 4         │
 │ Photosynthesis  │ Biology                       │ 7–11    │ 4 (+ 1)   │
 └─────────────────┴──────────────────────────────┴─────────┴───────────┘
+```
+
+**Extended topics (added via `extended_corpus_v2.py` and `extended_corpus_v3.py`):**
+
+```
+┌────────────────────────┬──────────────────────┬──────────┐
+│ Topic                  │ Subject              │ Grade    │
+├────────────────────────┼──────────────────────┼──────────┤
+│ Trigonometry           │ Mathematics          │ 9–10     │
+│ Genetics               │ Biology              │ 9–10     │
+│ Machine Learning       │ Technology           │ 10–11    │
+│ Electricity            │ Physics              │ 8–9      │
+│ Magnetism              │ Physics              │ 7–10     │
+│ Nervous System         │ Biology              │ 8–10     │
+│ Evolution              │ Biology              │ 9–10     │
+│ Cell Structure         │ Biology              │ 8–9      │
+│ Cellular Respiration   │ Biology              │ 9–11     │
+│ Nitrogen Cycle         │ Biology              │ 9        │
+│ Digestion              │ Biology              │ 8–9      │
+│ Immune System          │ Biology              │ 8–9      │
+│ Sound Waves            │ Physics              │ 8–9      │
+│ Cybersecurity          │ Technology           │ 9–10     │
+│ … and 130+ more        │ Multiple             │ 4–12     │
+└────────────────────────┴──────────────────────┴──────────┘
 ```
 
 Each document includes metadata used for retrieval filtering:

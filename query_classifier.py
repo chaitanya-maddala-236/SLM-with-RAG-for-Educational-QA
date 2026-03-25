@@ -35,6 +35,32 @@ SUBJECT_KEYWORDS: dict[str, list[str]] = {
     ],
 }
 
+SUBJECT_KEYWORDS.update({
+    "mathematics": [
+        "angle", "triangle", "hypotenuse", "radian", "degree",
+        "trig", "trigonometric", "pythagoras",
+        "algebra", "calculus", "differentiation", "integration", "function",
+        "equation", "polynomial", "matrix", "matrices", "vector", "logarithm",
+        "sequence", "series", "probability", "statistics", "geometry",
+    ],
+    "technology": [
+        "artificial intelligence", "cybersecurity", "hacking", "ransomware",
+        "software", "code", "programming", "internet", "digital", "computer",
+        "cloud computing", "blockchain", "iot",
+    ],
+    "chemistry": [
+        "atom", "molecule", "element", "compound", "bond", "ionic", "covalent",
+        "acid", "base", "reaction", "chemical", "periodic table", "valence",
+        "electron", "proton", "neutron", "mole", "concentration", "titration",
+        "organic", "polymer",
+    ],
+    "health science": [
+        "immune", "immunity", "antibody", "antigen", "vaccine", "pathogen",
+        "digestion", "nutrient", "absorption", "metabolism", "hormone",
+        "homeostasis", "health", "disease", "symptom", "treatment",
+    ],
+})
+
 # ── Topic keyword map ─────────────────────────────────────────────────────────
 TOPIC_KEYWORDS: dict[str, list[str]] = {
     "water cycle": [
@@ -56,6 +82,99 @@ TOPIC_KEYWORDS: dict[str, list[str]] = {
         "thylakoid", "stroma",
     ],
 }
+
+TOPIC_KEYWORDS.update({
+    "trigonometry": [
+        "trigonometry", "sin", "cos", "tan", "sine", "cosine", "tangent",
+        "angle", "triangle", "hypotenuse", "adjacent", "opposite", "radian",
+        "degree", "right angle", "trig", "trigonometric", "pythagoras",
+        "pythagorean", "unit circle", "soh cah toa", "arcsin", "arccos",
+        "arctan", "secant", "cosecant", "cotangent",
+    ],
+    "genetics": [
+        "genetics", "gene", "dna", "allele", "chromosome", "dominant",
+        "recessive", "genotype", "phenotype", "heredity", "inherit",
+        "mutation", "trait", "punnett", "mendel", "mendelian", "genome",
+        "nucleotide", "rna", "codon", "dna sequence", "heritability",
+        "hybrid", "homozygous", "heterozygous", "locus",
+    ],
+    "machine learning": [
+        "machine learning", "neural network", "algorithm", "training data",
+        "prediction", "classification", "regression", "clustering", "feature",
+        "supervised learning", "unsupervised learning", "deep learning",
+        "artificial intelligence", "gradient descent", "overfitting", "bias",
+        "variance", "model accuracy", "decision tree", "random forest",
+        "support vector", "backpropagation", "epoch", "batch size",
+    ],
+    "electricity": [
+        "electricity", "voltage", "current", "resistance", "circuit",
+        "ohm", "watt", "electron", "conductor", "insulator", "battery",
+        "charge", "coulomb", "ampere", "series circuit", "parallel circuit",
+        "electric field", "power", "potential difference", "ohm's law",
+        "kilowatt", "capacitor",
+    ],
+    "magnetism": [
+        "magnetism", "magnet", "magnetic field", "north pole", "south pole",
+        "attract", "repel", "compass", "ferromagnet", "electromagnet",
+        "induction", "magnetic flux", "tesla", "solenoid", "magnetic force",
+        "poles",
+    ],
+    "nervous system": [
+        "nervous system", "neuron", "nerve", "brain", "spinal cord",
+        "synapse", "reflex", "motor neuron", "sensory neuron", "dendrite",
+        "axon", "neurotransmitter", "central nervous system", "peripheral",
+        "cns", "pns", "cerebrum", "cerebellum", "medulla",
+    ],
+    "evolution": [
+        "evolution", "natural selection", "adaptation", "species", "darwin",
+        "mutation", "variation", "fossil", "selection pressure", "survival",
+        "fitness", "extinction", "common ancestor", "speciation",
+        "evolutionary", "descent", "genetic drift", "selection",
+    ],
+    "cell structure": [
+        "cell structure", "nucleus", "cell membrane", "mitochondria",
+        "ribosome", "organelle", "cytoplasm", "golgi apparatus",
+        "endoplasmic reticulum", "vacuole", "eukaryotic", "prokaryotic",
+        "cell wall", "lysosome", "animal cell", "plant cell", "chloroplast",
+        "centriole", "nucleolus",
+    ],
+    "cellular respiration": [
+        "cellular respiration", "atp", "glycolysis", "mitochondria",
+        "aerobic respiration", "anaerobic respiration", "krebs cycle",
+        "electron transport chain", "nadh", "fadh", "pyruvate",
+        "oxidative phosphorylation", "respiration", "metabolic",
+    ],
+    "nitrogen cycle": [
+        "nitrogen cycle", "nitrogen", "nitrification", "denitrification",
+        "ammonia", "nitrate", "nitrite", "nitrogen fixation", "decomposer",
+        "lightning", "fertilizer", "ammonification", "legume",
+        "rhizobium", "denitrifying bacteria",
+    ],
+    "digestion": [
+        "digestion", "stomach", "intestine", "digestive", "saliva",
+        "esophagus", "pancreas", "liver", "bile", "nutrient", "absorption",
+        "gut", "colon", "pepsin", "amylase", "villi", "peristalsis",
+        "gastric", "duodenum", "enzyme",
+    ],
+    "immune system": [
+        "immune system", "immune", "antibody", "antigen", "white blood cell",
+        "lymphocyte", "t cell", "b cell", "pathogen", "infection",
+        "inflammation", "vaccine", "immunity", "phagocyte", "macrophage",
+        "innate immunity", "adaptive immunity", "autoimmune", "allergen",
+    ],
+    "sound waves": [
+        "sound waves", "sound", "wave", "frequency", "amplitude", "decibel",
+        "pitch", "echo", "wavelength", "vibration", "acoustic", "ultrasound",
+        "hearing", "longitudinal wave", "compression", "rarefaction",
+        "resonance", "hertz",
+    ],
+    "cybersecurity": [
+        "cybersecurity", "hacking", "encryption", "firewall", "malware",
+        "virus", "phishing", "password", "data breach", "network security",
+        "cyber attack", "vulnerability", "authentication", "ransomware",
+        "trojan", "social engineering", "ssl", "tls", "two-factor",
+    ],
+})
 
 
 def classify_query(query: str) -> dict:
