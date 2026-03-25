@@ -19,6 +19,13 @@
 - [Setup & Installation](#-setup--installation)
 - [Running the App](#-running-the-app)
 - [Example Conversation Flows](#-example-conversation-flows)
+- [Research Overview](#-research-overview)
+- [System Architecture](#-system-architecture)
+- [Ablation Study](#-ablation-study)
+- [Multi-Model Comparison](#-multi-model-comparison)
+- [How to Run](#-how-to-run)
+- [Requirements](#-requirements)
+- [Research Contribution](#-research-contribution)
 
 ---
 
@@ -637,9 +644,10 @@ Status thresholds:
 EduSLM-RAG/
 │
 ├── app.py                       ← Streamlit UI (chat + pipeline viewer + metrics)
-├── main.py                      ← CLI demo runner (6 sample queries)
+├── main.py                      ← CLI demo runner (6 sample queries) + ablation study (--ablation)
 │
-├── rag_pipeline.py              ← 10-step pipeline orchestrator
+├── rag_pipeline.py              ← 10-step pipeline orchestrator + MLflow logging + multi-model support
+├── test_queries.py              ← 25+ benchmark test cases + run_benchmark() function
 │
 ├── contextual_query_builder.py  ← THE CORE MODULE
 │   ├── QueryNormalizer              Lowercase + contraction expansion + cleanup
@@ -668,7 +676,7 @@ EduSLM-RAG/
 ├── data_loader.py               ← 14-document educational knowledge base
 │   └── get_chunked_texts_and_metadatas()  chunk_size=400, overlap=50
 │
-├── evaluation.py                ← 6 evaluation metric implementations
+├── evaluation.py                ← 6 evaluation metric implementations + optional RAGAS metrics
 │
 ├── requirements.txt             ← Python dependencies
 └── chroma_db/                   ← Persisted vector store (auto-generated)
@@ -820,6 +828,22 @@ Runs 6 pre-set queries demonstrating:
 
 Prints debug logs for every pipeline step plus evaluation metrics.
 
+### Option C — Ablation Study
+
+```bash
+python main.py --ablation
+```
+
+Compares vector-only, BM25-only, and hybrid retrieval on a fixed query set and prints a side-by-side average metrics comparison table.
+
+### Option D — MLflow Experiment Dashboard (optional)
+
+```bash
+mlflow ui
+```
+
+Open **http://localhost:5000** to browse logged runs, compare metrics across queries and models, and filter by `query_topic` or `pipeline_mode` tags.
+
 ---
 
 ## 💬 Example Conversation Flows
@@ -940,4 +964,171 @@ This project is for educational and research purposes.
 
 ---
 
-*Built with Phi-3 · BGE-small · Chroma · LangChain · BM25 · Streamlit*
+## 🔬 Research Overview
+
+**SLM with RAG for Educational QA** investigates whether Small Language Models (SLMs) — models with 1–7 B parameters that run locally without a GPU cluster — can deliver high-quality, grounded answers for educational use when paired with a well-engineered Retrieval-Augmented Generation (RAG) pipeline.
+
+**Core contribution:** Rather than relying on a large, expensive model to memorise all knowledge, this system combines a *compact local SLM* (Phi-3, TinyLlama, LLaMA 3.2, or Mistral via Ollama) with a *structured educational knowledge base* and a multi-layer retrieval stack. The model only needs to reason over retrieved evidence — it does not need to store facts.
+
+Key research questions addressed:
+1. Can an SLM running locally answer multi-turn educational questions accurately when given retrieved context?
+2. Does hybrid BM25 + vector retrieval outperform either method alone in an educational domain?
+3. How well does contextual memory and ambiguity resolution maintain coherent multi-turn conversations?
+
+---
+
+## 🏗️ System Architecture
+
+The pipeline processes each user question in **10 ordered steps**:
+
+1. **Receive user question** — raw text input from the student
+2. **Check conversation memory** — retrieve recent topics from `ConversationMemory` and `TopicMemoryManager`; detect context drift via embedding cosine similarity
+3. **Contextual Query Builder** — normalise the query, score topic confidence, detect topic shifts, and rewrite the query with resolved context
+4. **Ambiguity detection** — identify multi-meaning terms (e.g. "cycle") and request clarification or resolve via conversation signals
+5. **Query classification** — assign a subject (e.g. Biology) and topic (e.g. photosynthesis) using keyword heuristics
+6. **Glossary mapping** — expand synonyms and domain-specific terms to enrich the retrieval query
+7. **Hierarchical retrieval** — topic-route to a filtered sub-corpus, then run hybrid BM25 + BGE-vector search across up to 20 candidates
+8. **Top-K document selection** — rerank candidates by token overlap + topic bonus; keep top-5
+9. **SLM answer generation** — Phi-3 (or other model) generates an answer grounded in the retrieved context; falls back to LLM-only when retrieval score is low
+10. **Evaluation + memory update** — compute 6 quality metrics, log to MLflow (optional), update conversation memory and topic decay tracker
+
+---
+
+## 📊 Evaluation Metrics
+
+After every query, **6 metrics** are computed and displayed in the Streamlit sidebar:
+
+| Metric | Definition |
+|---|---|
+| **Precision@K** | Fraction of the top-K retrieved documents whose topic matches the query topic |
+| **Recall@K** | Fraction of all relevant corpus documents that appear in the top-K results |
+| **MRR** | Mean Reciprocal Rank — 1 / position of the first relevant document (1.0 = first) |
+| **Faithfulness** | Fraction of answer tokens that are grounded in the retrieved context |
+| **Answer Relevance** | Fraction of meaningful query terms that appear in the generated answer |
+| **Context Relevance** | Average fraction of query terms covered by each retrieved document |
+
+Optional **RAGAS metrics** (requires `pip install ragas`) provide a second evaluation layer:
+- RAGAS Faithfulness, RAGAS Answer Relevancy, RAGAS Context Precision, RAGAS Context Recall
+
+---
+
+## 🧪 Ablation Study
+
+Run `python main.py --ablation` to compare three retrieval configurations on the same query set:
+
+| Retrieval Mode | BM25 | Vector Search | Description |
+|---|---|---|---|
+| **vector-only** | ✗ | ✓ | Semantic similarity only (BGE embeddings + Chroma) |
+| **BM25-only** | ✓ | ✗ | Keyword frequency matching only (alpha=0.0) |
+| **hybrid** | ✓ | ✓ | Weighted merge of BM25 + vector scores (alpha=0.5) — default |
+
+The study prints an average-metrics comparison table across all three modes, showing which retrieval strategy delivers the best Precision@K, Recall@K, MRR, Faithfulness, Answer Relevance, and Context Relevance for the educational domain.
+
+---
+
+## 🤖 Multi-Model Comparison
+
+The pipeline supports swapping the local SLM. The following models are configured for evaluation via the `MODELS_TO_EVALUATE` list in `rag_pipeline.py`:
+
+| Model | Size | Notes |
+|---|---|---|
+| **tinyllama** | ~1.1 B | Ultra-lightweight; fastest inference |
+| **phi3** | ~3.8 B | Default model; strong reasoning for its size |
+| **llama3.2** | ~3 B | Meta's compact Llama 3 variant |
+| **mistral** | ~7 B | Strong instruction-following; highest quality |
+
+Use the `run_model_comparison(queries, models)` helper in `rag_pipeline.py` to benchmark all four models on the same query list and receive averaged metric dictionaries per model.
+
+---
+
+## ▶️ How to Run
+
+### Prerequisites
+
+```bash
+# Install Python dependencies
+pip install -r requirements.txt
+
+# Optional: RAGAS evaluation metrics
+pip install ragas
+
+# Optional: MLflow experiment tracking
+pip install mlflow
+
+# Install and start Ollama, then pull the model
+ollama pull phi3
+```
+
+### Run the Streamlit Web UI
+
+```bash
+streamlit run app.py
+```
+
+Open **http://localhost:8501** in your browser for the full interactive chat interface with pipeline visualisation and live evaluation metrics.
+
+### Run the CLI Demo
+
+```bash
+python main.py
+```
+
+Runs 6 pre-set demonstration queries showing ambiguity resolution, context tracking, and topic-shift detection. Prints per-query and average evaluation metrics.
+
+### Run the Ablation Study
+
+```bash
+python main.py --ablation
+```
+
+Compares vector-only, BM25-only, and hybrid retrieval on a fixed query set and prints a side-by-side metrics table.
+
+### Launch MLflow Dashboard (optional)
+
+```bash
+mlflow ui
+```
+
+Open **http://localhost:5000** to browse experiment runs, compare metrics across models, and filter by tags such as `query_topic` and `pipeline_mode`.
+
+---
+
+## 📦 Requirements
+
+All required packages are listed in `requirements.txt`:
+
+```
+langchain>=0.2.0           # RAG orchestration framework
+langchain-community>=0.2.0 # Chroma + OllamaLLM integrations
+langchain-core>=0.2.0      # Core abstractions
+chromadb>=0.5.0            # Local vector store with metadata filtering
+sentence-transformers>=3.0.0 # BGE embeddings
+huggingface-hub>=0.23.0    # Model hub access
+transformers>=4.40.0       # Tokeniser utilities
+ollama>=0.2.0              # Local LLM runtime
+streamlit>=1.35.0          # Web UI
+rank-bm25>=0.2.2           # BM25 keyword retrieval
+tiktoken>=0.7.0            # Token counting
+numpy>=1.26.0              # Numerical operations
+```
+
+Optional (not in `requirements.txt`):
+```
+mlflow      # Experiment tracking — pip install mlflow
+ragas       # LLM-based evaluation metrics — pip install ragas
+```
+
+---
+
+## 💡 Research Contribution
+
+This project makes the following novel contributions relative to a baseline RAG system:
+
+| Contribution | Description |
+|---|---|
+| **Hybrid retrieval** | BM25 keyword search and BGE semantic vector search are merged with a weighted score, outperforming either method alone in the educational domain |
+| **Contextual memory** | `ConversationMemory` + `TopicMemoryManager` track topic history with exponential decay, enabling accurate follow-up query resolution |
+| **Ambiguity resolution** | A multi-signal disambiguation pipeline resolves ambiguous terms (e.g. "cycle" → water/carbon/bicycle) using conversation context, keyword signals, and glossary mappings |
+| **SLM focus** | The system is designed for models with 1–7 B parameters, making it deployable on consumer hardware without cloud APIs |
+| **Context drift protection** | Embedding-based context similarity detection prevents topic contamination across unrelated conversation turns |
+| **Optional advanced metrics** | RAGAS integration provides LLM-judge metrics (faithfulness, answer relevancy, context precision) alongside the built-in keyword-overlap metrics |
