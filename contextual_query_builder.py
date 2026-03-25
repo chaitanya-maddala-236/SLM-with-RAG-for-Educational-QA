@@ -44,7 +44,7 @@ import re
 from dataclasses import dataclass, field
 
 from context_memory import ConversationMemory
-from glossary_mapper import AMBIGUOUS_TERMS, DISAMBIGUATION_SIGNALS, GLOSSARY
+from glossary_mapper import AMBIGUOUS_TERMS, DISAMBIGUATION_SIGNALS, GLOSSARY, OUT_OF_SCOPE_SIGNALS
 
 # ── Canonical topics (must match metadata in data_loader.py) ─────────────────
 TOPICS: list[str] = [
@@ -91,9 +91,10 @@ TOPIC_KEYWORD_WEIGHTS: dict[str, dict[str, float]] = {
         "climate": 2.0, "sink": 2.0, "limestone": 3.0,
     },
     "bicycle": {
+        # Bugfix: removed "move" — too generic; kept only strong unambiguous signals
         "bicycle": 4.0, "bike": 3.0, "pedal": 3.0, "gear": 2.5,
         "brake": 3.0, "handlebar": 3.0, "sprocket": 3.0, "ride": 2.0,
-        "wheel": 2.0, "chain": 2.0, "derailleur": 3.0, "move": 1.5,
+        "wheel": 2.0, "chain": 2.0, "derailleur": 3.0,
     },
     "photosynthesis": {
         "photosynthesis": 4.0, "chlorophyll": 3.0, "chloroplast": 3.0,
@@ -726,6 +727,54 @@ class ContextualQueryBuilder:
         }
 
     # ── Public API ─────────────────────────────────────────────────────────────
+
+    def _is_out_of_scope(
+        self,
+        query: str,
+        topic_confidence: TopicConfidenceResult | None = None,
+    ) -> tuple[bool, str | None]:
+        """
+        Check whether *query* contains a word that signals it is outside this
+        knowledge base.
+
+        A query is only flagged as out-of-scope when BOTH conditions hold:
+        1. At least one word in the query matches OUT_OF_SCOPE_SIGNALS.
+        2. The top topic confidence score is below TOPIC_SWITCH_THRESHOLD (2.0),
+           meaning no strong in-scope topic signal overrides the out-of-scope word.
+
+        Edge cases handled
+        ------------------
+        - "how does a car battery work" → "battery" scores ≥ 2.0 for electricity,
+          so the strong topic signal wins and out-of-scope is NOT triggered.
+        - "explain the carbon cycle and how cars affect it" → "carbon cycle" has
+          high confidence (> 2.0) so out-of-scope is NOT triggered.
+        - "why do birds migrate" → "bird" matches out-of-scope, no topic signal
+          overrides, so it IS flagged as out-of-scope.
+
+        Args:
+            query:            Raw or normalised query string.
+            topic_confidence: Pre-computed topic confidence result.  If None the
+                              check is done without considering confidence scores
+                              (out-of-scope word alone is sufficient to flag).
+
+        Returns:
+            ``(True, matched_word)`` when out-of-scope is detected,
+            ``(False, None)`` otherwise.
+        """
+        query_lower = query.lower()
+        query_tokens = re.findall(r"\b[a-z]+\b", query_lower)
+
+        for word in query_tokens:
+            if word in OUT_OF_SCOPE_SIGNALS:
+                # Edge case handled: strong topic signal overrides out-of-scope word
+                if (
+                    topic_confidence is not None
+                    and topic_confidence.top_score >= TOPIC_SWITCH_THRESHOLD
+                ):
+                    return False, None
+                return True, word
+
+        return False, None
 
     def build(
         self,
