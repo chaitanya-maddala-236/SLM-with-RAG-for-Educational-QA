@@ -28,8 +28,6 @@ from context_memory import ConversationMemory
 from topic_memory_manager import TopicMemoryManager
 from retriever import build_vector_store
 from rag_pipeline import RAGPipeline
-from evaluation import format_metrics_table
-
 # ── Cached resources (load once, reuse across reruns) ────────────────────────
 
 @st.cache_resource(show_spinner="🔧 Building vector store (first run only)…")

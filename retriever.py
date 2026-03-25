@@ -129,10 +129,6 @@ def build_vector_store(persist: bool = True) -> Chroma:
         persist_directory=CHROMA_PERSIST_DIR if persist else None,
     )
 
-    if persist:
-        store.persist()
-        print(f"  [Chroma] Persisted {len(docs)} documents to {CHROMA_PERSIST_DIR}")
-
     return store
 
 
