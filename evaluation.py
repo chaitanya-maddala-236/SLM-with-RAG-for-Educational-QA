@@ -342,13 +342,16 @@ def compute_ragas_metrics(
         scores = _ragas_evaluate(dataset, metrics=metrics_to_run)
         scores_dict = scores.to_pandas().iloc[0].to_dict()
 
+        def _r(key: str) -> float:
+            return round(float(scores_dict.get(key, 0.0)), 3)
+
         result: dict[str, float] = {
-            "RAGAS Faithfulness": round(float(scores_dict.get("faithfulness", 0.0)), 3),
-            "RAGAS Answer Relevancy": round(float(scores_dict.get("answer_relevancy", 0.0)), 3),
-            "RAGAS Context Precision": round(float(scores_dict.get("context_precision", 0.0)), 3),
+            "RAGAS Faithfulness": _r("faithfulness"),
+            "RAGAS Answer Relevancy": _r("answer_relevancy"),
+            "RAGAS Context Precision": _r("context_precision"),
         }
         if ground_truth:
-            result["RAGAS Context Recall"] = round(float(scores_dict.get("context_recall", 0.0)), 3)
+            result["RAGAS Context Recall"] = _r("context_recall")
         return result
     except Exception:
         return {}

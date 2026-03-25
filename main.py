@@ -115,7 +115,7 @@ def run_ablation_study() -> None:
     _orig_hierarchical = _rag_mod.hierarchical_retrieve
 
     def _hierarchical_vector_only(vector_store, bm25_index, query, topic=None, k=5):
-        """Stage-1+2 retrieval using vector search only (bm25_index ignored)."""
+        """Stage-1+2 retrieval using vector search only (bm25_index set to None to disable BM25)."""
         return _orig_hybrid_search(
             vector_store=vector_store,
             bm25_index=None,   # disable BM25

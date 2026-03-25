@@ -634,6 +634,7 @@ class RAGPipeline:
                         "hybrid" if self._bm25_index is not None else "vector",
                     )
                     for metric_name, metric_val in result.metrics.items():
+                        # MLflow metric names must not contain '@'; replace with '_at_'
                         _mlflow.log_metric(metric_name.replace("@", "_at_"), metric_val)
                     _mlflow.set_tag("query_topic", str(final_topic or "unknown"))
                     _mlflow.set_tag("pipeline_mode", result.mode)

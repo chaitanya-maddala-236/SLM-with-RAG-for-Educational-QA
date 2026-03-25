@@ -195,9 +195,6 @@ def run_benchmark(pipeline, memory_cls, topic_manager_cls) -> dict:
             "summary"  – averaged metric values across all queries that
                          returned metrics
     """
-    from context_memory import ConversationMemory
-    from topic_memory_manager import TopicMemoryManager
-
     memory = memory_cls(max_turns=5)
     topic_manager = topic_manager_cls()
 
