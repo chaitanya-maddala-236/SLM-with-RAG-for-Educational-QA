@@ -154,6 +154,9 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
                 if entry.startswith("[Tokens Used]"):
                     st.markdown(f"🔢 `{entry}`")
                     continue
+                if entry.startswith("[Pipeline Stats]"):
+                    st.markdown(f"📈 `{entry}`")
+                    continue
 
                 try:
                     step_num = int(entry.split("]")[0].replace("[Step", "").strip())
