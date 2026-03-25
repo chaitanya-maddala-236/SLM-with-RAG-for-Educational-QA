@@ -8,7 +8,13 @@ Also provides term expansion for better retrieval.
 import re
 
 # ── Canonical topic names (must match metadata in data_loader.py) ────────────
-TOPICS = ["water cycle", "carbon cycle", "bicycle", "photosynthesis"]
+TOPICS = [
+    "water cycle", "carbon cycle", "bicycle", "photosynthesis",
+    "trigonometry", "genetics", "machine learning", "electricity",
+    "magnetism", "nervous system", "evolution", "cell structure",
+    "cellular respiration", "nitrogen cycle", "digestion", "immune system",
+    "sound waves", "cybersecurity",
+]
 
 # ── Ambiguous terms: each key maps to possible topics ────────────────────────
 # Used by the ambiguity detector.  Order matters: first entry = default
@@ -166,3 +172,174 @@ def disambiguate_with_signals(ambiguous_term: str, query: str) -> str | None:
         if signal_word in query_lower:
             return resolved_topic
     return None
+
+
+GLOSSARY.update({
+    # trigonometry
+    "trig": "trigonometry",
+    "sine": "trigonometry",
+    "cosine": "trigonometry",
+    "tangent": "trigonometry",
+    "sin": "trigonometry",
+    "cos": "trigonometry",
+    "tan": "trigonometry",
+    "hypotenuse": "trigonometry",
+    "pythagorean theorem": "trigonometry",
+    "unit circle": "trigonometry",
+    "radian": "trigonometry",
+    "right triangle": "trigonometry",
+    "trigonometric": "trigonometry",
+
+    # genetics
+    "dna": "genetics",
+    "gene": "genetics",
+    "allele": "genetics",
+    "chromosome": "genetics",
+    "heredity": "genetics",
+    "inheritance": "genetics",
+    "genotype": "genetics",
+    "phenotype": "genetics",
+    "dominant trait": "genetics",
+    "recessive trait": "genetics",
+    "punnett square": "genetics",
+    "mendelian genetics": "genetics",
+    "mutation": "genetics",
+    "genome": "genetics",
+
+    # machine learning
+    "neural network": "machine learning",
+    "deep learning": "machine learning",
+    "artificial intelligence": "machine learning",
+    "supervised learning": "machine learning",
+    "unsupervised learning": "machine learning",
+    "training data": "machine learning",
+    "gradient descent": "machine learning",
+    "overfitting": "machine learning",
+    "classification algorithm": "machine learning",
+    "regression model": "machine learning",
+
+    # electricity
+    "voltage": "electricity",
+    "current": "electricity",
+    "resistance": "electricity",
+    "ohm's law": "electricity",
+    "electric circuit": "electricity",
+    "series circuit": "electricity",
+    "parallel circuit": "electricity",
+    "conductor": "electricity",
+    "insulator": "electricity",
+    "ampere": "electricity",
+    "watt": "electricity",
+    "kilowatt": "electricity",
+
+    # magnetism
+    "magnet": "magnetism",
+    "magnetic field": "magnetism",
+    "electromagnet": "magnetism",
+    "magnetic force": "magnetism",
+    "north pole": "magnetism",
+    "south pole": "magnetism",
+    "compass": "magnetism",
+    "magnetic flux": "magnetism",
+
+    # nervous system
+    "neuron": "nervous system",
+    "synapse": "nervous system",
+    "axon": "nervous system",
+    "dendrite": "nervous system",
+    "neurotransmitter": "nervous system",
+    "reflex arc": "nervous system",
+    "spinal cord": "nervous system",
+    "central nervous system": "nervous system",
+    "peripheral nervous system": "nervous system",
+    "brain function": "nervous system",
+
+    # evolution
+    "natural selection": "evolution",
+    "darwin": "evolution",
+    "adaptation": "evolution",
+    "speciation": "evolution",
+    "common ancestor": "evolution",
+    "genetic drift": "evolution",
+    "fossil record": "evolution",
+    "survival of the fittest": "evolution",
+
+    # cell structure
+    "nucleus": "cell structure",
+    "mitochondria": "cell structure",
+    "cell membrane": "cell structure",
+    "organelle": "cell structure",
+    "ribosome": "cell structure",
+    "cytoplasm": "cell structure",
+    "endoplasmic reticulum": "cell structure",
+    "golgi apparatus": "cell structure",
+    "eukaryote": "cell structure",
+    "prokaryote": "cell structure",
+    "animal cell": "cell structure",
+    "plant cell": "cell structure",
+
+    # cellular respiration
+    "atp synthesis": "cellular respiration",
+    "glycolysis": "cellular respiration",
+    "krebs cycle": "cellular respiration",
+    "electron transport chain": "cellular respiration",
+    "aerobic respiration": "cellular respiration",
+    "anaerobic respiration": "cellular respiration",
+    "oxidative phosphorylation": "cellular respiration",
+    "pyruvate": "cellular respiration",
+
+    # nitrogen cycle
+    "nitrification": "nitrogen cycle",
+    "denitrification": "nitrogen cycle",
+    "nitrogen fixation": "nitrogen cycle",
+    "ammonification": "nitrogen cycle",
+    "nitrate": "nitrogen cycle",
+    "nitrite": "nitrogen cycle",
+    "ammonia": "nitrogen cycle",
+
+    # digestion
+    "digestive system": "digestion",
+    "stomach acid": "digestion",
+    "small intestine": "digestion",
+    "large intestine": "digestion",
+    "peristalsis": "digestion",
+    "bile": "digestion",
+    "amylase": "digestion",
+    "pepsin": "digestion",
+    "villi": "digestion",
+    "nutrient absorption": "digestion",
+
+    # immune system
+    "antibody": "immune system",
+    "antigen": "immune system",
+    "lymphocyte": "immune system",
+    "t cell": "immune system",
+    "b cell": "immune system",
+    "phagocyte": "immune system",
+    "vaccination": "immune system",
+    "innate immunity": "immune system",
+    "adaptive immunity": "immune system",
+    "autoimmune disease": "immune system",
+
+    # sound waves
+    "frequency": "sound waves",
+    "amplitude": "sound waves",
+    "wavelength": "sound waves",
+    "decibel": "sound waves",
+    "pitch": "sound waves",
+    "echo": "sound waves",
+    "resonance": "sound waves",
+    "ultrasound": "sound waves",
+    "longitudinal wave": "sound waves",
+
+    # cybersecurity
+    "encryption": "cybersecurity",
+    "firewall": "cybersecurity",
+    "malware": "cybersecurity",
+    "phishing": "cybersecurity",
+    "data breach": "cybersecurity",
+    "hacker": "cybersecurity",
+    "ransomware": "cybersecurity",
+    "two-factor authentication": "cybersecurity",
+    "network security": "cybersecurity",
+})

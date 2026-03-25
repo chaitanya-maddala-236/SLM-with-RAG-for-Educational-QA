@@ -47,7 +47,13 @@ from context_memory import ConversationMemory
 from glossary_mapper import AMBIGUOUS_TERMS, DISAMBIGUATION_SIGNALS, GLOSSARY
 
 # ── Canonical topics (must match metadata in data_loader.py) ─────────────────
-TOPICS: list[str] = ["water cycle", "carbon cycle", "bicycle", "photosynthesis"]
+TOPICS: list[str] = [
+    "water cycle", "carbon cycle", "bicycle", "photosynthesis",
+    "trigonometry", "genetics", "machine learning", "electricity",
+    "magnetism", "nervous system", "evolution", "cell structure",
+    "cellular respiration", "nitrogen cycle", "digestion", "immune system",
+    "sound waves", "cybersecurity",
+]
 
 # ── Extended ambiguous terms ──────────────────────────────────────────────────
 # Superset of glossary_mapper.AMBIGUOUS_TERMS; adds domain-relevant words that
@@ -55,11 +61,15 @@ TOPICS: list[str] = ["water cycle", "carbon cycle", "bicycle", "photosynthesis"]
 EXTENDED_AMBIGUOUS_TERMS: dict[str, list[str]] = {
     **AMBIGUOUS_TERMS,
     # Domain terms ambiguous across multiple educational topics:
-    "cell":    ["photosynthesis", "carbon cycle"],  # biology cell vs. battery cell
-    "model":   ["water cycle", "carbon cycle", "photosynthesis", "bicycle"],
-    "system":  ["water cycle", "carbon cycle", "photosynthesis"],
-    "process": ["water cycle", "carbon cycle", "photosynthesis"],
-    "reaction": ["photosynthesis", "carbon cycle"],
+    "cell":    ["photosynthesis", "carbon cycle", "cell structure"],  # biology cell / battery cell / cell structure
+    "model":   ["water cycle", "carbon cycle", "photosynthesis", "bicycle", "machine learning"],
+    "system":  ["water cycle", "carbon cycle", "photosynthesis", "nervous system", "immune system", "digestion"],
+    "process": ["water cycle", "carbon cycle", "photosynthesis", "digestion", "cellular respiration"],
+    "reaction": ["photosynthesis", "carbon cycle", "cellular respiration"],
+    "network": ["nervous system", "machine learning"],
+    "training": ["machine learning"],
+    "signal":  ["nervous system", "sound waves"],
+    "wave":    ["sound waves"],
     # Pronouns that must always be resolved via memory
     "it":   [],
     "this": [],
@@ -92,6 +102,107 @@ TOPIC_KEYWORD_WEIGHTS: dict[str, dict[str, float]] = {
         "light reaction": 3.0,
         "plant": 1.0, "plants": 1.0, "leaf": 1.5, "leaves": 1.5,
         "algae": 1.5, "photosynthetic": 2.0,
+    },
+    "trigonometry": {
+        "trigonometry": 4.0, "sin": 3.0, "cos": 3.0, "tan": 3.0,
+        "sine": 3.0, "cosine": 3.0, "tangent": 3.0, "angle": 2.0,
+        "triangle": 2.0, "hypotenuse": 3.0, "radian": 3.0, "degree": 1.5,
+        "trig": 3.0, "trigonometric": 3.5, "pythagoras": 3.0,
+        "unit circle": 3.0, "arcsin": 3.0, "arccos": 3.0, "arctan": 3.0,
+    },
+    "genetics": {
+        "genetics": 4.0, "gene": 3.0, "dna": 3.0, "allele": 3.5,
+        "chromosome": 3.5, "dominant": 2.5, "recessive": 2.5,
+        "genotype": 3.5, "phenotype": 3.5, "heredity": 3.0,
+        "inherit": 2.5, "mutation": 2.5, "punnett": 4.0,
+        "mendel": 3.5, "mendelian": 3.5, "genome": 3.0,
+        "nucleotide": 3.0, "homozygous": 3.5, "heterozygous": 3.5,
+    },
+    "machine learning": {
+        "machine learning": 4.0, "neural network": 4.0, "deep learning": 4.0,
+        "artificial intelligence": 3.5, "algorithm": 2.0, "training": 2.5,
+        "prediction": 2.0, "classification": 2.5, "regression": 2.5,
+        "clustering": 3.0, "supervised": 3.0, "unsupervised": 3.0,
+        "gradient descent": 4.0, "overfitting": 3.5, "backpropagation": 4.0,
+        "epoch": 2.5, "model accuracy": 3.0, "decision tree": 3.5,
+    },
+    "electricity": {
+        "electricity": 4.0, "voltage": 3.5, "current": 2.5, "resistance": 3.0,
+        "circuit": 3.0, "ohm": 3.5, "watt": 3.0, "ampere": 3.5,
+        "conductor": 2.5, "insulator": 2.5, "battery": 2.0,
+        "series circuit": 3.5, "parallel circuit": 3.5,
+        "ohm's law": 4.0, "potential difference": 3.0, "coulomb": 3.5,
+    },
+    "magnetism": {
+        "magnetism": 4.0, "magnet": 3.5, "magnetic field": 4.0,
+        "north pole": 3.0, "south pole": 3.0, "attract": 1.5, "repel": 2.0,
+        "compass": 3.0, "electromagnet": 4.0, "induction": 3.0,
+        "magnetic flux": 3.5, "tesla": 3.0, "solenoid": 3.5,
+        "ferromagnet": 3.5, "magnetic force": 3.5,
+    },
+    "nervous system": {
+        "nervous system": 4.0, "neuron": 3.5, "nerve": 3.0, "brain": 2.5,
+        "spinal cord": 3.5, "synapse": 3.5, "reflex": 3.0, "axon": 3.5,
+        "dendrite": 3.5, "neurotransmitter": 4.0, "cns": 3.5, "pns": 3.5,
+        "cerebrum": 3.5, "cerebellum": 3.5, "motor neuron": 3.5,
+        "sensory neuron": 3.5, "medulla": 3.0,
+    },
+    "evolution": {
+        "evolution": 4.0, "natural selection": 4.0, "adaptation": 3.0,
+        "species": 2.0, "darwin": 3.5, "mutation": 2.5, "variation": 2.0,
+        "fossil": 2.5, "survival": 2.0, "fitness": 2.0, "extinction": 2.5,
+        "common ancestor": 4.0, "speciation": 4.0, "genetic drift": 3.5,
+        "evolutionary": 3.5,
+    },
+    "cell structure": {
+        "cell structure": 4.0, "nucleus": 3.0, "cell membrane": 3.5,
+        "mitochondria": 3.5, "ribosome": 3.5, "organelle": 4.0,
+        "cytoplasm": 3.0, "golgi": 3.5, "endoplasmic reticulum": 4.0,
+        "vacuole": 3.0, "eukaryotic": 3.5, "prokaryotic": 3.5,
+        "cell wall": 3.0, "lysosome": 3.5, "centriole": 3.5,
+        "animal cell": 3.5, "plant cell": 3.5,
+    },
+    "cellular respiration": {
+        "cellular respiration": 4.0, "atp": 3.5, "glycolysis": 4.0,
+        "krebs cycle": 4.0, "electron transport chain": 4.0,
+        "aerobic": 3.0, "anaerobic": 3.0, "pyruvate": 3.5,
+        "oxidative phosphorylation": 4.0, "nadh": 3.5, "fadh": 3.5,
+        "mitochondria": 2.0, "respiration": 3.0,
+    },
+    "nitrogen cycle": {
+        "nitrogen cycle": 4.0, "nitrogen": 3.0, "nitrification": 4.0,
+        "denitrification": 4.0, "ammonia": 3.0, "nitrate": 3.5,
+        "nitrite": 3.5, "nitrogen fixation": 4.0, "ammonification": 4.0,
+        "rhizobium": 4.0, "legume": 3.0, "fertilizer": 2.0,
+        "denitrifying": 3.5,
+    },
+    "digestion": {
+        "digestion": 4.0, "stomach": 3.0, "intestine": 3.0,
+        "digestive": 3.5, "saliva": 3.0, "esophagus": 3.5,
+        "pancreas": 3.5, "liver": 2.5, "bile": 3.5, "nutrient": 2.0,
+        "absorption": 2.5, "villi": 3.5, "peristalsis": 4.0,
+        "pepsin": 3.5, "amylase": 3.5, "duodenum": 4.0,
+    },
+    "immune system": {
+        "immune system": 4.0, "immune": 3.0, "antibody": 4.0,
+        "antigen": 4.0, "lymphocyte": 4.0, "t cell": 4.0, "b cell": 4.0,
+        "pathogen": 3.0, "infection": 2.0, "inflammation": 2.5,
+        "vaccine": 3.0, "phagocyte": 4.0, "macrophage": 4.0,
+        "innate immunity": 4.0, "adaptive immunity": 4.0, "autoimmune": 4.0,
+    },
+    "sound waves": {
+        "sound waves": 4.0, "sound": 2.5, "frequency": 3.0,
+        "amplitude": 3.0, "decibel": 3.5, "pitch": 3.0, "echo": 3.0,
+        "wavelength": 3.0, "vibration": 2.5, "acoustic": 3.0,
+        "ultrasound": 3.5, "longitudinal wave": 4.0, "resonance": 3.0,
+        "compression": 2.5, "rarefaction": 4.0, "hertz": 3.5,
+    },
+    "cybersecurity": {
+        "cybersecurity": 4.0, "hacking": 3.5, "encryption": 3.5,
+        "firewall": 3.5, "malware": 4.0, "phishing": 4.0,
+        "data breach": 4.0, "ransomware": 4.0, "vulnerability": 3.0,
+        "authentication": 3.0, "network security": 4.0,
+        "social engineering": 4.0, "trojan": 3.5, "cyber attack": 4.0,
     },
 }
 
