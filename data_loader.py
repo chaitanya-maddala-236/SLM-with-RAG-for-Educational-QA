@@ -6,6 +6,9 @@ Each document has: text, subject, topic, grade metadata.
 Topics covered: water cycle, carbon cycle, bicycle, photosynthesis.
 """
 
+from extended_corpus_v2 import EXTENDED_DOCUMENTS_V2
+from extended_corpus_v3 import EXTENDED_DOCUMENTS_V3
+
 EDUCATIONAL_DOCUMENTS = [
     # ── WATER CYCLE ──────────────────────────────────────────────────────────
     {
