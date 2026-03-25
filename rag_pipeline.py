@@ -351,10 +351,30 @@ class RAGPipeline:
             ).strip()
             result.rewritten_query = pronoun_rewritten
 
+        # Check for follow-up BEFORE drift detection
+        # Follow-up queries must never trigger drift detection; they always
+        # continue the last topic regardless of low cosine similarity.
+        _FOLLOWUP_SKIP_WORDS: set[str] = {
+            "it", "its", "this", "that", "these", "those",
+            "they", "their", "advantages", "disadvantages",
+            "limitations", "example", "examples", "explain",
+            "why", "how", "what", "applications", "uses",
+            "difference", "compare", "summarize", "elaborate",
+        }
+        query_tokens_set = set(user_query.lower().split())
+        is_likely_followup = (
+            len(query_tokens_set) <= 5
+            and bool(query_tokens_set & _FOLLOWUP_SKIP_WORDS)
+            and memory.get_last_topic() is not None
+        )
+
+        if is_likely_followup:
+            result.log(2, "Follow-up query detected — skipping drift check")
+
         # Compare the current query to the last conversation turn.  If the
         # similarity is below the threshold the user has shifted to an
         # unrelated topic: clear context and answer directly from the LLM.
-        if memory.history and not has_pronoun:
+        if memory.history and not is_likely_followup:
             last_turn = list(memory.history)[-1]
             last_context_text = last_turn.user_query
             if last_turn.resolved_topic:
@@ -466,6 +486,17 @@ class RAGPipeline:
 
         # ── Step 3: Contextual Query Builder ──────────────────────────────────
         ctx_result = self._ctx_builder.build(user_query, memory)
+
+        # Followup handling — log and tag when the builder resolved via memory
+        if ctx_result.ambiguity_result.resolution_source == "followup_memory":
+            result.log(
+                3,
+                f"Follow-up query detected → resolved to last topic "
+                f"'{ctx_result.resolved_topic}' | "
+                f"rewritten: '{ctx_result.rewritten_query}'",
+            )
+            result.tag_log("Query", f"[Follow-up] {ctx_result.rewritten_query}")
+
         shift_info = (
             f" ({ctx_result.ambiguity_result.shift_reason})"
             if ctx_result.ambiguity_result.shift_detected

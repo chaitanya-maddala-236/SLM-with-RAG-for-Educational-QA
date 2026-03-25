@@ -227,6 +227,106 @@ MIN_DOMAIN_SPECIFIC_WORD_LENGTH: int = 5
 # 0.75; the maximum reasonable compound score (≈8–12) caps at 1.0 via min().
 _SCORE_NORMALISER: float = 4.0
 
+# ── Followup handling: pattern catalogue ─────────────────────────────────────
+FOLLOWUP_PATTERNS: dict[str, list[str]] = {
+    # Generic explanation
+    "explanation": [
+        "how does it work", "explain this", "explain it",
+        "explain more", "tell me more", "elaborate", "go deeper",
+        "explain in detail", "describe it", "what is it",
+    ],
+    # Reasoning
+    "reasoning": [
+        "why does it work", "why is this", "why is it important",
+        "why do we need this", "why does this happen",
+        "what causes it", "what causes this", "reason for this",
+        "why?", "how?", "what?",
+    ],
+    # Examples
+    "examples": [
+        "give an example", "explain with example",
+        "show example", "real world example", "example?",
+        "give example", "example please", "illustrate",
+    ],
+    # Advantages/disadvantages
+    "advantages": [
+        "advantages", "disadvantages", "pros and cons",
+        "benefits", "drawbacks", "merits", "demerits",
+        "pros?", "cons?", "benefits?",
+    ],
+    # Limitations
+    "limitations": [
+        "limitations", "what are limitations", "drawbacks",
+        "challenges", "problems with it", "issues",
+        "weaknesses", "what are drawbacks",
+    ],
+    # Comparison
+    "comparison": [
+        "how is it different", "what is the difference",
+        "compare with", "which is better", "compare it",
+        "difference between", "vs", "versus",
+    ],
+    # Application
+    "application": [
+        "where is it used", "how is it used", "applications",
+        "what are applications", "uses of it", "real life use",
+        "practical use", "where do we use",
+    ],
+    # Process
+    "process": [
+        "what happens next", "next step", "what is the process",
+        "steps involved", "how does the process work",
+        "walk me through", "step by step",
+    ],
+    # Continuation starters
+    "continuation": [
+        "and advantages", "and limitations", "and applications",
+        "and examples", "and disadvantages", "and uses",
+        "and what about", "what about", "also explain",
+        "also tell", "and tell me",
+    ],
+    # Short confirmations
+    "confirmation": [
+        "really?", "how?", "why?", "example?", "more?",
+        "details?", "elaborate?", "seriously?", "truly?",
+    ],
+    # Deeper understanding
+    "deeper": [
+        "in simple words", "in simple terms", "simplify",
+        "explain simply", "explain like i am 5",
+        "beginner explanation", "basic explanation",
+        "summarize", "summary", "brief explanation",
+    ],
+    # Definition follow-up
+    "definition": [
+        "what does it mean", "meaning of this", "define it",
+        "what does that mean", "meaning?", "definition?",
+    ],
+}
+
+# ── Followup handling: pronoun words that signal a reference to last topic ────
+PRONOUN_WORDS: set[str] = {
+    "it", "its", "this", "that", "these", "those",
+    "they", "their", "them", "such", "the process",
+    "the cycle", "the system", "the concept", "the topic",
+}
+
+# ── Followup handling: words that start a continuation of the previous topic ──
+CONTINUATION_STARTERS: set[str] = {
+    "and", "also", "additionally", "furthermore",
+    "moreover", "besides", "what about", "how about",
+}
+
+# Maximum number of tokens for a query to be considered "short" and lacking a
+# topic signal (used in is_followup_query Rule 3).
+_MAX_SHORT_QUERY_TOKENS: int = 4
+
+# Pattern types that are too generic to produce a good templated rewrite on
+# their own; these are refined with a secondary FOLLOWUP_PATTERNS lookup
+# inside rewrite_followup_query before the template is applied.
+_GENERIC_FOLLOWUP_TYPES: frozenset[str] = frozenset({
+    "short_no_topic", "continuation", "no_topic_signal",
+})
 
 # ── 1. Query Normalizer ───────────────────────────────────────────────────────
 
@@ -728,6 +828,200 @@ class ContextualQueryBuilder:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
+    # Followup handling ────────────────────────────────────────────────────────
+
+    def is_followup_query(
+        self,
+        query: str,
+        last_topic: str | None,
+    ) -> tuple[bool, str]:
+        """
+        Detect if query is a follow-up to the previous topic.
+
+        Returns a tuple ``(is_followup, pattern_type)`` where *pattern_type*
+        is a short string describing why the query was classified as a
+        follow-up (e.g. ``"pronoun_only"``, ``"continuation"``, etc.) or
+        ``"not_followup"`` / ``"no_memory"`` otherwise.
+
+        Detection rules (applied in priority order)
+        --------------------------------------------
+        1. Query contains only pronouns from PRONOUN_WORDS → followup
+        2. Query starts with CONTINUATION_STARTERS → followup
+        3. Query length ≤ 4 words AND no new topic noun (score < 1.0) → followup
+        4. Query matches any pattern in FOLLOWUP_PATTERNS → followup
+        5. Query has no topic confidence (score == 0.0) AND last_topic exists → followup
+
+        Override: strong topic confidence (score ≥ TOPIC_SWITCH_THRESHOLD)
+        always cancels follow-up detection so that a new high-confidence
+        topic wins over the previous context.
+
+        Edge cases handled
+        ------------------
+        - ``"how?"`` alone → followup
+        - ``"and advantages?"`` → followup (continuation starter)
+        - ``"what about limitations"`` → followup
+        - ``"explain more"`` → followup
+        - ``"give example"`` → followup
+        - ``"why is this important"`` → followup (pronoun "this")
+        - ``"compare with others"`` → followup (no new topic)
+        - ``"what does it mean"`` → followup (pronoun "it")
+        - ``"summarize"`` alone → followup
+        - ``"really?"`` alone → followup
+        - ``"in simple words"`` → followup (no topic signal = inherit last)
+        - ``"step by step"`` → followup
+        - ``"where is it used"`` → followup (pronoun "it")
+        - ``"what are its components"`` → followup (pronoun "its")
+        - ``"limitations?"`` alone → followup
+        - ``"disadvantages"`` alone → followup
+        - ``"example?"`` alone → followup
+        - ``"how does this work"`` → followup (pronoun "this")
+        - ``"tell me more about it"`` → followup (pronoun "it")
+        - ``"can you explain further"`` → followup (no new topic)
+        """
+        if not last_topic:
+            return False, "no_memory"
+
+        query_lower = query.lower().strip().rstrip("?").strip()
+        tokens = query_lower.split()
+
+        # Override: strong topic confidence wins — new topic takes precedence
+        topic_confidence = self._scorer.score(query_lower)
+        if topic_confidence.top_score >= TOPIC_SWITCH_THRESHOLD:
+            return False, "not_followup"
+
+        # Rule 1: Only pronouns in query
+        meaningful_tokens = [t for t in tokens if len(t) > 2]
+        if meaningful_tokens and all(t in PRONOUN_WORDS for t in meaningful_tokens):
+            return True, "pronoun_only"
+
+        # Rule 2: Starts with continuation starter
+        if tokens and tokens[0] in CONTINUATION_STARTERS:
+            return True, "continuation"
+        if len(tokens) >= 2 and " ".join(tokens[:2]) in CONTINUATION_STARTERS:
+            return True, "continuation"
+
+        # Rule 3: Very short query with no topic signal
+        if len(tokens) <= _MAX_SHORT_QUERY_TOKENS and topic_confidence.top_score < 1.0:
+            return True, "short_no_topic"
+
+        # Rule 4: Matches a known follow-up pattern
+        # Compare against normalised (no "?") form of each pattern so that
+        # entries like "really?" still match the normalised query "really".
+        for pattern_type, patterns in FOLLOWUP_PATTERNS.items():
+            for pattern in patterns:
+                p_norm = pattern.rstrip("?").strip()
+                if p_norm in query_lower or query_lower == p_norm:
+                    return True, pattern_type
+
+        # Rule 5: No topic confidence and last topic exists
+        if topic_confidence.top_score == 0.0 and last_topic:
+            return True, "no_topic_signal"
+
+        return False, "not_followup"
+
+    def rewrite_followup_query(
+        self,
+        query: str,
+        last_topic: str,
+        pattern_type: str,
+    ) -> str:
+        """
+        Rewrite a follow-up query by attaching the previous topic context.
+
+        Pronouns are first replaced with the topic name.  Continuation starters
+        are stripped.  Then a pattern-specific template is applied to produce a
+        self-contained, retrievable query.
+
+        Rewriting rules per pattern type
+        ---------------------------------
+        - ``pronoun_only``  : replace pronoun with topic
+          ``"how does it work"`` → ``"How does the water cycle work"``
+        - ``continuation``  : strip starter, prepend topic
+          ``"and advantages?"`` → ``"Advantages of water cycle"``
+        - ``short_no_topic``: append topic directly
+          ``"explain"`` → ``"Explain water cycle"``
+        - ``examples``      : ``"Examples of {topic} in real life"``
+        - ``advantages``    : ``"Advantages and disadvantages of {topic}"``
+        - ``limitations``   : ``"Limitations and challenges of {topic}"``
+        - ``comparison``    : ``"{query} in context of {topic}"``
+        - ``application``   : ``"Applications and uses of {topic}"``
+        - ``process``       : ``"Process and steps involved in {topic}"``
+        - ``deeper``        : ``"{query} about {topic}"``
+        - ``definition``    : ``"Definition and meaning of {topic}"``
+        - ``confirmation``  : ``"Explain {topic} in more detail"``
+        - default           : ``"{query} about {topic}"``
+        """
+        # Keep a copy with "?" intact for pattern matching (e.g. "really?")
+        query_with_q = query.lower().strip()
+        query_lower = query_with_q.rstrip("?").strip()
+
+        # Strip continuation starters BEFORE pronoun replacement and pattern
+        # matching so the remaining content word can be classified correctly.
+        for starter in CONTINUATION_STARTERS:
+            if query_lower.startswith(starter + " "):
+                query_lower = query_lower[len(starter):].strip()
+                query_with_q = query_with_q[len(starter):].strip()
+
+        # Refine generic pattern_types by checking FOLLOWUP_PATTERNS.
+        # This runs BEFORE pronoun replacement so patterns such as
+        # "where is it used" still match before "it" is replaced.
+        # Patterns ending with "?" are normalised (strip "?") for comparison
+        # because the normalizer strips punctuation before this method is called.
+        if pattern_type in _GENERIC_FOLLOWUP_TYPES:
+            for check_q in [query_lower, query_with_q]:
+                found = False
+                for candidate_type, patterns in FOLLOWUP_PATTERNS.items():
+                    for p in patterns:
+                        p_norm = p.rstrip("?").strip()
+                        if p_norm in check_q or check_q == p_norm:
+                            pattern_type = candidate_type
+                            found = True
+                            break
+                    if found:
+                        break
+                if found:
+                    break
+
+        # Replace pronouns with topic using word boundaries to avoid
+        # replacing "it" inside words such as "limitations".
+        for pronoun in sorted(PRONOUN_WORDS, key=len, reverse=True):
+            # Use word boundary for single-word pronouns; substring for phrases
+            if " " in pronoun:
+                if pronoun in query_lower:
+                    query_lower = query_lower.replace(pronoun, f"the {last_topic}", 1)
+            else:
+                query_lower = re.sub(
+                    r"\b" + re.escape(pronoun) + r"\b",
+                    f"the {last_topic}",
+                    query_lower,
+                )
+
+        # Pattern-specific rewrites
+        rewrites: dict[str, str] = {
+            "advantages":   f"advantages and disadvantages of {last_topic}",
+            "limitations":  f"limitations and challenges of {last_topic}",
+            "examples":     f"examples of {last_topic} in real life",
+            "application":  f"applications and uses of {last_topic}",
+            "process":      f"process and steps involved in {last_topic}",
+            "definition":   f"definition and meaning of {last_topic}",
+            "comparison":   f"{query_lower} in context of {last_topic}",
+            "confirmation": f"explain {last_topic} in more detail",
+            "continuation": f"{query_lower} of {last_topic}",
+            "deeper":       f"{query_lower} about {last_topic}",
+            "reasoning":    f"{query_lower} in {last_topic}",
+        }
+
+        if pattern_type in rewrites:
+            return rewrites[pattern_type].capitalize()
+
+        # Default: if topic not already in query, append it
+        if last_topic.lower() not in query_lower:
+            return f"{query_lower} about {last_topic}".capitalize()
+
+        return query_lower.capitalize()
+
+    # ── Out-of-scope ───────────────────────────────────────────────────────────
+
     def _is_out_of_scope(
         self,
         query: str,
@@ -805,6 +1099,39 @@ class ContextualQueryBuilder:
         # A: Normalise
         normalised = self._normalizer.normalize(user_query)
         notes.append(f"Normalised query: '{normalised}'")
+
+        # A1: Follow-up detection (before confidence scoring)
+        # Followup handling — must run before step B so that short/pronoun
+        # queries are rewired to the last topic without triggering the full
+        # ambiguity pipeline.
+        is_followup, followup_type = self.is_followup_query(normalised, last_topic)
+
+        if is_followup and last_topic:
+            rewritten = self.rewrite_followup_query(
+                normalised, last_topic, followup_type
+            )
+            notes.append(
+                f"Follow-up detected (type={followup_type}) → "
+                f"rewritten: '{rewritten}' using last topic: '{last_topic}'"
+            )
+            # Score confidence on the rewritten query so downstream steps have
+            # a meaningful signal even though the original query lacked keywords.
+            confidence = self._scorer.score(rewritten)
+            return ContextualQueryResult(
+                original_query=user_query,
+                normalized_query=normalised,
+                rewritten_query=rewritten,
+                resolved_topic=last_topic,
+                topic_confidence=confidence,
+                ambiguity_result=AmbiguityResult(
+                    ambiguous_terms=[],
+                    resolved_topic=last_topic,
+                    resolution_source="followup_memory",
+                    confidence=0.9,
+                ),
+                topic_switched=False,
+                debug_notes=notes,
+            )
 
         # B: Score topic confidence
         confidence = self._scorer.score(normalised)
