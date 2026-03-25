@@ -270,3 +270,72 @@ if __name__ == "__main__":
         print(f"  expected_keywords={item['expected_keywords']}")
         print()
     print("To run a full benchmark, call run_benchmark(pipeline, ConversationMemory, TopicMemoryManager)")
+
+
+# ── Edge Case N: Followup handling test matrix ────────────────────────────────
+# The cases below document expected behaviour of is_followup_query() and
+# rewrite_followup_query() for the most common conversation patterns.
+
+# Edge Case 1: Single word follow-up
+# Previous: nitrogen cycle → "limitations?" → "Limitations and challenges of nitrogen cycle"
+
+# Edge Case 2: Pronoun follow-up
+# Previous: photosynthesis → "how does it work" → "How does the photosynthesis work"
+
+# Edge Case 3: Continuation starter
+# Previous: water cycle → "and advantages?" → "Advantages and disadvantages of water cycle"
+
+# Edge Case 4: "what about" pattern
+# Previous: genetics → "what about limitations" → "Limitations and challenges of genetics"
+
+# Edge Case 5: Comparison without second topic
+# Previous: electricity → "how is it different" → "How is the electricity different in context of electricity"
+
+# Edge Case 6: Very short query no topic
+# Previous: carbon cycle → "explain" → "Explain about carbon cycle"
+
+# Edge Case 7: Process question
+# Previous: digestion → "what happens next" → "Process and steps involved in digestion"
+
+# Edge Case 8: Application question
+# Previous: machine learning → "where is it used" → "Applications and uses of machine learning"
+
+# Edge Case 9: Simplification request
+# Previous: trigonometry → "explain in simple words" → "Explain in simple words about trigonometry"
+
+# Edge Case 10: Confirmation question
+# Previous: evolution → "really?" → "Explain evolution in more detail"
+
+# Edge Case 11: "and" continuation
+# Previous: immune system → "and what about applications" → "Applications and uses of immune system"
+
+# Edge Case 12: Possessive pronoun
+# Previous: nitrogen cycle → "what are its components" → "What are the nitrogen cycle components"
+
+# Edge Case 13: Multi-pronoun
+# Previous: sound waves → "how do they travel" → "How do sound waves travel"
+
+# Edge Case 14: Topic shift should NOT be treated as follow-up
+# Previous: water cycle → "what is machine learning" → topic shift, reset context
+# (high confidence score for machine learning overrides follow-up detection)
+
+# Edge Case 15: Strong new topic overrides follow-up
+# Previous: bicycle → "explain photosynthesis" → high confidence new topic wins
+
+# Edge Case 16: Empty/whitespace query
+# → return "Please ask a complete question"
+
+# Edge Case 17: "tell me more" pattern
+# Previous: cell structure → "tell me more" → "Tell me more about cell structure"
+
+# Edge Case 18: "go deeper" pattern
+# Previous: cybersecurity → "go deeper" → "Go deeper about cybersecurity"
+
+# Edge Case 19: "step by step" request
+# Previous: cellular respiration → "step by step" → "Process and steps involved in cellular respiration"
+
+# Edge Case 20: Out of scope after valid topic
+# Previous: nitrogen cycle → "how does a car engine work" → out of scope,
+# respond with: "car engine is outside my knowledge base,
+# but I can continue explaining nitrogen cycle if you'd like"
+
