@@ -127,7 +127,13 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
             score_str = (
                 f"  _(score: {retrieval_score:.3f})_" if retrieval_score is not None else ""
             )
-            st.markdown(f"{mode_color} **Mode:** {mode}{score_str}")
+            ctx_sim = result_meta.get("context_similarity")
+            ctx_sim_str = (
+                f"  _(context similarity: {ctx_sim:.3f})_"
+                if ctx_sim is not None
+                else ""
+            )
+            st.markdown(f"{mode_color} **Mode:** {mode}{score_str}{ctx_sim_str}")
 
         if token_counts:
             tc1, tc2, tc3 = st.columns(3)
@@ -142,6 +148,9 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
         with st.container(height=300):
             for entry in step_log:
                 # Custom tag entries (e.g. [Query], [Mode], [Tokens Used])
+                if entry.startswith("[Context Similarity]"):
+                    st.markdown(f"🔀 `{entry}`")
+                    continue
                 if entry.startswith("[Query]"):
                     st.markdown(f"🔍 `{entry}`")
                     continue
@@ -257,6 +266,7 @@ def render_chat_column(pipeline: RAGPipeline) -> None:
         "mode": result.mode,
         "retrieval_score": result.retrieval_score,
         "token_counts": result.token_counts,
+        "context_similarity": result.context_similarity,
     }
 
     # Build assistant message
