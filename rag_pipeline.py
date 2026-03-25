@@ -23,6 +23,8 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+
+import numpy as np
 # from langchain.schema import Document
 from langchain_core.documents import Document
 from langchain_community.llms import Ollama
@@ -119,6 +121,9 @@ TOP_K = 5          # number of documents to return after reranking
 RETRIEVAL_CANDIDATES = 20   # wider pool fetched before reranking
 # Similarity threshold: scores at or above this use RAG mode; below → LLM Fallback
 RAG_SIMILARITY_THRESHOLD: float = 0.6
+# Context drift threshold: cosine similarity between the current query and the
+# last conversation context below this value indicates an out-of-context query.
+CONTEXT_SIMILARITY_THRESHOLD: float = 0.30
 CLARIFICATION_MSG = (
     "I found the term '{term}' in your question, which could mean: {options}. "
     "Could you clarify which one you meant?"
@@ -142,6 +147,18 @@ _FILLER_WORDS: frozenset[str] = frozenset({
 _COMPOUND_RE = re.compile(
     r"\b(and|also|additionally|furthermore|as well as|plus)\b", re.IGNORECASE
 )
+
+
+def _cosine_similarity(v1: list[float], v2: list[float]) -> float:
+    """Return cosine similarity between two embedding vectors.
+
+    Since BGE embeddings are L2-normalised, this is equivalent to the dot
+    product.  A safe fallback of 0.0 is returned for zero-length vectors.
+    """
+    a = np.asarray(v1, dtype=float)
+    b = np.asarray(v2, dtype=float)
+    denom = np.linalg.norm(a) * np.linalg.norm(b)
+    return float(np.dot(a, b) / denom) if denom > 0 else 0.0
 
 
 def _is_vague_query(query: str) -> bool:
@@ -180,6 +197,7 @@ class PipelineResult:
     retrieval_score: float = 0.0
     mode: str = "RAG"
     token_counts: dict[str, int] = field(default_factory=dict)
+    context_similarity: float | None = None
 
     def log(self, step: int, message: str) -> None:
         entry = f"[Step {step:>2}] {message}"
@@ -211,6 +229,8 @@ class RAGPipeline:
         self.top_k = top_k
         self.llm = Ollama(model=model_name, temperature=0.1)
         self._ctx_builder = ContextualQueryBuilder()
+        # Embedding function reused for context-similarity checks
+        self._embed_fn = vector_store._embedding_function
         # Collect all corpus docs once (for recall denominator and BM25 index)
         texts, metadatas = get_texts_and_metadatas()
         self.all_docs = [
@@ -226,6 +246,21 @@ class RAGPipeline:
             print("[Init] rank_bm25 not installed; using vector-only retrieval.")
 
     # ── Public entry point ────────────────────────────────────────────────────
+
+    def _context_similarity(self, query: str, context_text: str) -> float:
+        """Compute cosine similarity between *query* and *context_text*.
+
+        Uses the same BGE embedding model that powers the vector store so that
+        similarity scores are consistent with the retrieval pipeline.  Returns
+        1.0 (assume in-context) on any embedding failure so that errors never
+        silently block normal retrieval.
+        """
+        try:
+            q_vec = self._embed_fn.embed_query(query)
+            c_vec = self._embed_fn.embed_query(context_text)
+            return _cosine_similarity(q_vec, c_vec)
+        except Exception:
+            return 1.0
 
     def run(
         self,
@@ -277,6 +312,85 @@ class RAGPipeline:
             f"recent: {recent_topics} | "
             f"active (with decay): '{active_topic}'",
         )
+
+        # ── Context Drift Detection ───────────────────────────────────────────
+        # Compare the current query to the last conversation turn.  If the
+        # similarity is below the threshold the user has shifted to an
+        # unrelated topic: clear context and answer directly from the LLM.
+        if memory.history:
+            last_turn = list(memory.history)[-1]
+            last_context_text = last_turn.user_query
+            if last_turn.resolved_topic:
+                last_context_text += f" {last_turn.resolved_topic}"
+
+            ctx_sim = self._context_similarity(user_query, last_context_text)
+            result.context_similarity = ctx_sim
+            result.log(
+                2,
+                f"Context similarity to last turn: {ctx_sim:.4f} "
+                f"(threshold: {CONTEXT_SIMILARITY_THRESHOLD})",
+            )
+            result.tag_log("Context Similarity", f"{ctx_sim:.4f}")
+
+            if ctx_sim < CONTEXT_SIMILARITY_THRESHOLD:
+                result.log(
+                    2,
+                    "Context drift detected — clearing conversation context "
+                    "and switching to LLM fallback.",
+                )
+                memory.clear()
+                if topic_manager is not None:
+                    topic_manager.update(None)
+
+                result.mode = "LLM Fallback"
+                _pipeline_stats["fallback_triggers"] += 1
+
+                # ── Step 9 (fast-path): answer from LLM only ─────────────────
+                prompt_text = LLM_FALLBACK_PROMPT.format(question=user_query)
+                result.log(
+                    9,
+                    "Mode LLM Fallback (context drift): answering from "
+                    "Phi-3 knowledge only (no retrieved context) …",
+                )
+                result.tag_log("Mode", result.mode)
+                try:
+                    answer = self.llm.invoke(prompt_text)
+                except Exception as e:
+                    answer = f"[Error generating answer: {e}]"
+                result.answer = answer.strip()
+                result.log(10, f"Answer generated ({len(result.answer)} chars).")
+
+                # ── Token counting ────────────────────────────────────────────
+                input_tokens = _count_tokens(prompt_text)
+                output_tokens = _count_tokens(result.answer)
+                total_tokens = input_tokens + output_tokens
+                result.token_counts = {
+                    "input_tokens": input_tokens,
+                    "output_tokens": output_tokens,
+                    "total_tokens": total_tokens,
+                }
+                result.tag_log(
+                    "Tokens Used",
+                    f"input={input_tokens}, output={output_tokens}, "
+                    f"total={total_tokens}",
+                )
+
+                # ── Update pipeline stats ─────────────────────────────────────
+                _pipeline_stats["total_queries"] += 1
+                result.tag_log(
+                    "Pipeline Stats",
+                    f"total={_pipeline_stats['total_queries']}, "
+                    f"fallbacks={_pipeline_stats['fallback_triggers']}, "
+                    f"clarifications={_pipeline_stats['clarifications_requested']}",
+                )
+
+                # Record the turn so future turns have a reference point
+                memory.add_turn(
+                    user_query=user_query,
+                    resolved_topic=None,
+                    answer_snippet=result.answer[:120],
+                )
+                return result
 
         # ── Step 3: Contextual Query Builder ──────────────────────────────────
         ctx_result = self._ctx_builder.build(user_query, memory)
