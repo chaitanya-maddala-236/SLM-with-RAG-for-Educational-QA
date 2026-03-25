@@ -85,6 +85,8 @@ GLOSSARY: dict[str, str] = {
 
 # ── Context signals that help disambiguate ────────────────────────────────────
 # When the term 'cycle' appears, these words in the query shift the meaning.
+# Bugfix: removed "move", "fast", "speed" — too generic; kept only unambiguous
+# bicycle-specific signals.
 DISAMBIGUATION_SIGNALS: dict[str, dict[str, str]] = {
     "cycle": {
         # words in the query that signal a specific meaning
@@ -95,14 +97,30 @@ DISAMBIGUATION_SIGNALS: dict[str, dict[str, str]] = {
         "carbon": "carbon cycle",
         "co2": "carbon cycle",
         "fossil": "carbon cycle",
-        "move": "bicycle",
+        # Bugfix: only strong unambiguous bicycle signals kept here
         "ride": "bicycle",
-        "wheel": "bicycle",
         "pedal": "bicycle",
-        "fast": "bicycle",
-        "speed": "bicycle",
+        "wheel": "bicycle",
+        "brake": "bicycle",
+        "gear": "bicycle",
+        "sprocket": "bicycle",
+        "handlebar": "bicycle",
     },
 }
+
+# ── Out-of-scope signals ──────────────────────────────────────────────────────
+# Words that indicate a query is outside this knowledge base.
+# Declared as a frozenset for O(1) membership testing in hot code paths.
+# Edge case handled: OUT_OF_SCOPE detection is bypassed when topic confidence >= 2.0
+OUT_OF_SCOPE_SIGNALS: frozenset[str] = frozenset({
+    "car", "truck", "airplane", "plane", "ship", "boat",
+    "train", "rocket", "helicopter", "drone", "submarine",
+    "animal", "dog", "cat", "horse", "bird", "fish",
+    "history", "war", "politics", "economy", "religion",
+    "country", "city", "person", "celebrity", "sport",
+    "football", "cricket", "movie", "music", "food",
+    "recipe", "cooking", "fashion", "weather",
+})
 
 
 def map_term(term: str) -> str | None:

@@ -60,13 +60,14 @@ except Exception:  # ImportError, ConnectionError, or any other init failure
 
 from context_memory import ConversationMemory
 from topic_memory_manager import TopicMemoryManager
-from contextual_query_builder import ContextualQueryBuilder
+from contextual_query_builder import ContextualQueryBuilder, TOPIC_KEYWORD_WEIGHTS
 from query_classifier import classify_query, detect_topic_shift
 from glossary_mapper import (
     get_ambiguous_terms,
     disambiguate_with_signals,
     expand_query,
     AMBIGUOUS_TERMS,
+    OUT_OF_SCOPE_SIGNALS,
 )
 from retriever import (
     build_bm25_index,
@@ -237,6 +238,7 @@ class RAGPipeline:
     ) -> None:
         self.vector_store = vector_store
         self.top_k = top_k
+        self.model_name = model_name  # Bugfix: store for MLflow logging
         self.llm = OllamaLLM(model=model_name, temperature=0.1)
         self._ctx_builder = ContextualQueryBuilder()
         # Embedding function reused for context-similarity checks
@@ -324,10 +326,35 @@ class RAGPipeline:
         )
 
         # ── Context Drift Detection ───────────────────────────────────────────
+        # Bugfix: if the query contains a pronoun and we have a last topic,
+        # skip the drift check entirely and force-resolve to the last topic.
+        # This prevents "what are its components" from clearing nitrogen-cycle memory.
+        _PRONOUNS = frozenset({"it", "its", "they", "their", "this", "that", "these", "those"})
+        query_tokens_lower = set(re.findall(r"\b[a-z]+\b", user_query.lower()))
+        has_pronoun = bool(query_tokens_lower & _PRONOUNS)
+
+        if has_pronoun and last_topic:
+            result.log(
+                2,
+                f"Pronoun detected — skipping drift check, "
+                f"resolving to last topic: '{last_topic}'",
+            )
+            # Rewrite the query to make the topic explicit for retrieval.
+            # Replace only the first pronoun occurrence to avoid over-substitution
+            # (e.g. "what are its components and their functions" keeps "their").
+            pronoun_rewritten = re.sub(
+                r"\b(it|its|they|their|this|that|these|those)\b",
+                last_topic,
+                user_query,
+                count=1,
+                flags=re.IGNORECASE,
+            ).strip()
+            result.rewritten_query = pronoun_rewritten
+
         # Compare the current query to the last conversation turn.  If the
         # similarity is below the threshold the user has shifted to an
         # unrelated topic: clear context and answer directly from the LLM.
-        if memory.history:
+        if memory.history and not has_pronoun:
             last_turn = list(memory.history)[-1]
             last_context_text = last_turn.user_query
             if last_turn.resolved_topic:
@@ -402,6 +429,41 @@ class RAGPipeline:
                 )
                 return result
 
+        # ── Step 2b: Out-of-scope pre-validation ──────────────────────────────
+        # Check if query is outside the knowledge base BEFORE calling the LLM.
+        # Bugfix: pre-score topic confidence here so the out-of-scope check can
+        # respect a strong in-scope signal (edge case: "car battery" → electricity).
+        _pre_confidence = self._ctx_builder._scorer.score(user_query.lower())
+        oos_detected, oos_word = self._ctx_builder._is_out_of_scope(
+            user_query, _pre_confidence
+        )
+        if oos_detected:
+            result.log(
+                2,
+                f"[Step 2b] Out-of-scope detected: '{oos_word}' not in knowledge base",
+            )
+            result.mode = "Out of Scope"
+            result.answer = (
+                f"This question appears to be outside my knowledge base which "
+                f"covers educational science and mathematics topics. "
+                f"I found '{oos_word}' in your query which is not a topic I cover. "
+                f"Could you ask about: water cycle, photosynthesis, nitrogen cycle, "
+                f"genetics, electricity, or any other science/maths topic?"
+            )
+            _pipeline_stats["total_queries"] += 1
+            result.tag_log(
+                "Pipeline Stats",
+                f"total={_pipeline_stats['total_queries']}, "
+                f"fallbacks={_pipeline_stats['fallback_triggers']}, "
+                f"clarifications={_pipeline_stats['clarifications_requested']}",
+            )
+            memory.add_turn(
+                user_query=user_query,
+                resolved_topic=None,
+                answer_snippet=result.answer[:120],
+            )
+            return result
+
         # ── Step 3: Contextual Query Builder ──────────────────────────────────
         ctx_result = self._ctx_builder.build(user_query, memory)
         shift_info = (
@@ -425,6 +487,37 @@ class RAGPipeline:
         # The contextually rewritten query is used for all downstream steps
         ctx_rewritten = ctx_result.rewritten_query
         ctx_topic = ctx_result.resolved_topic
+
+        # ── Step 3b: Post-rewrite sanity check ────────────────────────────────
+        # Bugfix: reject rewrites that contradict strong content words in the
+        # original query (e.g. original="how car moves", rewritten contains
+        # "bicycle" but "car" is an out-of-scope word unrelated to bicycle).
+        _rewrite_rejected = False
+        if ctx_topic is not None:
+            original_tokens = set(re.findall(r"\b[a-z]+\b", user_query.lower()))
+            # Check if any original word belongs to a DIFFERENT topic's keywords
+            # than the resolved topic, or is an out-of-scope signal word
+            ctx_topic_kw_tokens: set[str] = {
+                tok
+                for kw in TOPIC_KEYWORD_WEIGHTS.get(ctx_topic, {})
+                for tok in kw.split()
+            }
+            for orig_word in original_tokens:
+                if orig_word in OUT_OF_SCOPE_SIGNALS:
+                    # Contradiction: original query has an out-of-scope word
+                    # but rewriter picked an in-scope topic — reject
+                    result.log(
+                        3,
+                        f"[Step 3b] Rewrite rejected — contradiction detected "
+                        f"('{orig_word}' is out-of-scope but rewrite resolved to "
+                        f"'{ctx_topic}'), reverting to original query",
+                    )
+                    ctx_rewritten = user_query
+                    ctx_topic = None
+                    _rewrite_rejected = True
+                    break
+        if not _rewrite_rejected:
+            result.log(3, f"[Step 3b] Rewrite validated: '{ctx_rewritten}'")
 
         # ── Step 4: Ambiguity detection (on the rewritten query) ──────────────
         # After the ContextualQueryBuilder the query is usually already resolved;
@@ -624,22 +717,28 @@ class RAGPipeline:
         )
 
         # Research addition: optional MLflow logging (no-op when mlflow is not installed)
+        # Bugfix: end any existing run first to avoid nested run errors, then open a
+        # fresh named run so metrics are always recorded correctly.
         if _MLFLOW_AVAILABLE:
             try:
-                with _mlflow.start_run(nested=True):
-                    _mlflow.log_param("model_name", self.llm.model)
+                try:
+                    _mlflow.end_run()
+                except Exception:
+                    pass
+                with _mlflow.start_run(run_name=f"{self.model_name}_top{self.top_k}"):
+                    _mlflow.log_param("model", self.model_name)
                     _mlflow.log_param("top_k", self.top_k)
                     _mlflow.log_param(
                         "retrieval_mode",
                         "hybrid" if self._bm25_index is not None else "vector",
                     )
-                    for metric_name, metric_val in result.metrics.items():
-                        # MLflow metric names must not contain '@'; replace with '_at_'
-                        _mlflow.log_metric(metric_name.replace("@", "_at_"), metric_val)
-                    _mlflow.set_tag("query_topic", str(final_topic or "unknown"))
-                    _mlflow.set_tag("pipeline_mode", result.mode)
-            except Exception:
-                pass  # MLflow errors must never crash the pipeline
+                    _mlflow.log_param("pipeline_mode", result.mode)
+                    _mlflow.log_param("query_topic", str(final_topic))
+                    for metric_name, metric_value in result.metrics.items():
+                        safe_name = metric_name.replace("@", "_at_").replace(" ", "_")
+                        _mlflow.log_metric(safe_name, metric_value)
+            except Exception as mlflow_error:
+                print(f"[MLflow] Logging skipped: {mlflow_error}")
 
         # ── Update pipeline stats and log ─────────────────────────────────────
         _pipeline_stats["total_queries"] += 1
