@@ -188,6 +188,9 @@ EDUCATIONAL_DOCUMENTS = [
     },
 ]
 
+EDUCATIONAL_DOCUMENTS += EXTENDED_DOCUMENTS_V2
+EDUCATIONAL_DOCUMENTS += EXTENDED_DOCUMENTS_V3
+
 
 def get_documents() -> list[dict]:
     """Return the full list of educational documents."""
