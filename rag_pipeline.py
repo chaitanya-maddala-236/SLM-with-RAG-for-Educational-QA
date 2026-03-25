@@ -25,6 +25,14 @@ import re
 from dataclasses import dataclass, field
 
 import numpy as np
+
+# Research addition: optional MLflow integration (pip install mlflow)
+try:
+    import mlflow as _mlflow
+    _MLFLOW_AVAILABLE = True
+except ImportError:
+    _mlflow = None  # type: ignore[assignment]
+    _MLFLOW_AVAILABLE = False
 # from langchain.schema import Document
 from langchain_core.documents import Document
 from langchain_ollama import OllamaLLM
@@ -127,6 +135,9 @@ CLARIFICATION_MSG = (
     "I found the term '{term}' in your question, which could mean: {options}. "
     "Could you clarify which one you meant?"
 )
+
+# Research addition: list of SLMs available via Ollama for multi-model evaluation
+MODELS_TO_EVALUATE = ["tinyllama", "phi3", "llama3.2", "mistral"]
 
 # ── Pipeline-level statistics (module-level, survives across pipeline calls) ──
 _pipeline_stats: dict[str, int] = {
@@ -612,6 +623,23 @@ class RAGPipeline:
             mode=result.mode,
         )
 
+        # Research addition: optional MLflow logging (no-op when mlflow is not installed)
+        if _MLFLOW_AVAILABLE:
+            try:
+                with _mlflow.start_run(nested=True):
+                    _mlflow.log_param("model_name", self.llm.model)
+                    _mlflow.log_param("top_k", self.top_k)
+                    _mlflow.log_param(
+                        "retrieval_mode",
+                        "hybrid" if self._bm25_index is not None else "vector",
+                    )
+                    for metric_name, metric_val in result.metrics.items():
+                        _mlflow.log_metric(metric_name.replace("@", "_at_"), metric_val)
+                    _mlflow.set_tag("query_topic", str(final_topic or "unknown"))
+                    _mlflow.set_tag("pipeline_mode", result.mode)
+            except Exception:
+                pass  # MLflow errors must never crash the pipeline
+
         # ── Update pipeline stats and log ─────────────────────────────────────
         _pipeline_stats["total_queries"] += 1
         result.tag_log(
@@ -631,3 +659,80 @@ class RAGPipeline:
             topic_manager.update(final_topic)
 
         return result
+
+
+# Research addition: multi-model comparison helper
+def run_model_comparison(
+    queries: list[str],
+    models: list[str] | None = None,
+    vector_store: "Chroma | None" = None,
+    top_k: int = TOP_K,
+) -> dict[str, dict]:
+    """
+    Run the same list of queries through multiple Ollama models and return
+    averaged evaluation metrics per model for comparison.
+
+    Args:
+        queries:      List of plain-text queries to evaluate.
+        models:       List of Ollama model names.  Defaults to MODELS_TO_EVALUATE.
+        vector_store: A pre-built Chroma vector store.  If None the store is
+                      built fresh (slow — provide one when calling repeatedly).
+        top_k:        Number of documents to retrieve per query.
+
+    Returns:
+        Dict mapping model_name → {"avg_metrics": {...}, "per_query": [...]}
+    """
+    from retriever import build_vector_store as _build_vs
+    from context_memory import ConversationMemory
+    from topic_memory_manager import TopicMemoryManager
+
+    if models is None:
+        models = MODELS_TO_EVALUATE
+
+    if vector_store is None:
+        vector_store = _build_vs(persist=True)
+
+    comparison: dict[str, dict] = {}
+
+    for model_name in models:
+        print(f"\n[Model Comparison] Running model: {model_name} …")
+        try:
+            pipeline = RAGPipeline(
+                vector_store=vector_store,
+                model_name=model_name,
+                top_k=top_k,
+            )
+        except Exception as exc:
+            comparison[model_name] = {"error": str(exc), "avg_metrics": {}, "per_query": []}
+            print(f"  [Model Comparison] Failed to load {model_name}: {exc}")
+            continue
+
+        per_query: list[dict] = []
+        all_metrics: list[dict] = []
+
+        for query in queries:
+            memory = ConversationMemory(max_turns=5)
+            topic_manager = TopicMemoryManager()
+            try:
+                result = pipeline.run(
+                    user_query=query,
+                    memory=memory,
+                    topic_manager=topic_manager,
+                )
+                per_query.append({"query": query, "metrics": result.metrics})
+                if result.metrics:
+                    all_metrics.append(result.metrics)
+            except Exception as exc:
+                per_query.append({"query": query, "error": str(exc), "metrics": {}})
+
+        avg_metrics: dict[str, float] = {}
+        if all_metrics:
+            for key in all_metrics[0]:
+                avg_metrics[key] = round(
+                    sum(m[key] for m in all_metrics) / len(all_metrics), 3
+                )
+
+        comparison[model_name] = {"avg_metrics": avg_metrics, "per_query": per_query}
+        print(f"  [Model Comparison] {model_name} done. Avg metrics: {avg_metrics}")
+
+    return comparison

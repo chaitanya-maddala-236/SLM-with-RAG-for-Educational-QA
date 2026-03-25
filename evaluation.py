@@ -10,10 +10,27 @@ Metrics implemented:
   - Faithfulness : how well the answer stays grounded in retrieved context
   - Answer Relevance  : how directly the answer addresses the question
   - Context Relevance : how relevant the retrieved context is to the question
+
+Research addition: optional RAGAS metrics (pip install ragas)
+  - ragas Faithfulness, Answer Relevancy, Context Precision, Context Recall
 """
 
 import re
 from langchain_core.documents import Document
+
+# Research addition: optional RAGAS import (falls back to keyword metrics silently)
+try:
+    from ragas import evaluate as _ragas_evaluate
+    from ragas.metrics import (
+        faithfulness as _ragas_faithfulness,
+        answer_relevancy as _ragas_answer_relevancy,
+        context_precision as _ragas_context_precision,
+        context_recall as _ragas_context_recall,
+    )
+    from datasets import Dataset as _HFDataset
+    _RAGAS_AVAILABLE = True
+except ImportError:
+    _RAGAS_AVAILABLE = False
 
 
 # ── Shared stop-word set & tokeniser ─────────────────────────────────────────
@@ -266,3 +283,72 @@ def format_metrics_table(metrics: dict[str, float]) -> str:
         rows.append(row)
     rows.append(sep)
     return "\n".join(rows)
+
+
+# Research addition: RAGAS-based evaluation (optional — requires pip install ragas)
+def compute_ragas_metrics(
+    query: str,
+    answer: str,
+    retrieved_docs: list[Document],
+    ground_truth: str = "",
+) -> dict[str, float]:
+    """
+    Compute RAGAS evaluation metrics if the ragas library is installed.
+
+    Metrics returned (when ragas is available):
+        - RAGAS Faithfulness
+        - RAGAS Answer Relevancy
+        - RAGAS Context Precision
+        - RAGAS Context Recall
+
+    Falls back silently to an empty dict when ragas or its dependencies
+    (datasets) are not installed.
+
+    Args:
+        query:          The user question.
+        answer:         The generated answer text.
+        retrieved_docs: Documents retrieved for this query.
+        ground_truth:   Optional reference answer for context_recall scoring.
+                        Leave empty to skip context_recall.
+
+    Returns:
+        Dict mapping RAGAS metric name → float score.  Returns an empty dict
+        on any error so the calling code is never broken.
+    """
+    if not _RAGAS_AVAILABLE:
+        return {}
+
+    try:
+        contexts = [doc.page_content for doc in retrieved_docs]
+
+        data: dict[str, list] = {
+            "question": [query],
+            "answer": [answer],
+            "contexts": [contexts],
+        }
+        if ground_truth:
+            data["ground_truth"] = [ground_truth]
+
+        dataset = _HFDataset.from_dict(data)
+
+        metrics_to_run = [
+            _ragas_faithfulness,
+            _ragas_answer_relevancy,
+            _ragas_context_precision,
+        ]
+        if ground_truth:
+            metrics_to_run.append(_ragas_context_recall)
+
+        scores = _ragas_evaluate(dataset, metrics=metrics_to_run)
+        scores_dict = scores.to_pandas().iloc[0].to_dict()
+
+        result: dict[str, float] = {
+            "RAGAS Faithfulness": round(float(scores_dict.get("faithfulness", 0.0)), 3),
+            "RAGAS Answer Relevancy": round(float(scores_dict.get("answer_relevancy", 0.0)), 3),
+            "RAGAS Context Precision": round(float(scores_dict.get("context_precision", 0.0)), 3),
+        }
+        if ground_truth:
+            result["RAGAS Context Recall"] = round(float(scores_dict.get("context_recall", 0.0)), 3)
+        return result
+    except Exception:
+        return {}
