@@ -110,6 +110,22 @@ No external documents are available. Answer based on your own knowledge.
 Answer:""",
 )
 
+# ── Prompt template for partial context (low-confidence retrieval) ────────────
+PARTIAL_CONTEXT_PROMPT = PromptTemplate(
+    input_variables=["context", "question"],
+    template="""You are a helpful educational assistant.
+The following context may be partially relevant to the question.
+Use it if helpful, but also draw on your own knowledge if needed.
+Be honest if the context is not directly relevant.
+
+Partial Context:
+{context}
+
+Question: {question}
+
+Answer:""",
+)
+
 # ── Prompt template for vague / one-word queries ──────────────────────────────
 VAGUE_QUERY_PROMPT = PromptTemplate(
     input_variables=["query"],
@@ -129,6 +145,10 @@ TOP_K = 5          # number of documents to return after reranking
 RETRIEVAL_CANDIDATES = 20   # wider pool fetched before reranking
 # Similarity threshold: scores at or above this use RAG mode; below → LLM Fallback
 RAG_SIMILARITY_THRESHOLD: float = 0.6
+# Bugfix: Partial RAG threshold — scores between this and RAG_SIMILARITY_THRESHOLD
+# use PARTIAL_CONTEXT_PROMPT with retrieved docs as partial context instead of
+# discarding them entirely.
+PARTIAL_RAG_THRESHOLD: float = 0.3
 # Context drift threshold: cosine similarity between the current query and the
 # last conversation context below this value indicates an out-of-context query.
 CONTEXT_SIMILARITY_THRESHOLD: float = 0.30
@@ -152,6 +172,29 @@ _FILLER_WORDS: frozenset[str] = frozenset({
     "what", "is", "are", "how", "does", "do", "can", "explain", "tell",
     "me", "about", "the", "a", "an", "of", "in", "for", "it", "its",
     "that", "this", "please", "just", "give", "show", "describe",
+})
+
+# ── Pure follow-up patterns (Bug 3 fix) ──────────────────────────────────────
+# Queries that start with (or exactly match) these phrases are pure follow-ups
+# that should never trigger context-drift detection.
+_PURE_FOLLOWUP_PATTERNS: frozenset[str] = frozenset({
+    "advantages", "disadvantages", "limitations", "examples",
+    "applications", "uses", "difference", "compare", "elaborate",
+    "summarize", "explain more", "tell me more", "pros and cons",
+    "what are its", "what are the", "how does it", "why does it",
+    "give example", "real world", "where is it used",
+})
+
+# ── Stop-words used by _extract_query_topic ───────────────────────────────────
+_TOPIC_QUESTION_WORDS: frozenset[str] = frozenset({
+    "what", "is", "are", "how", "does", "explain", "tell",
+    "describe", "define", "why", "where", "when", "do", "can",
+    # aspect/modifier words that are not themselves a topic
+    "advantages", "disadvantages", "limitations", "examples",
+    "applications", "uses",
+})
+_TOPIC_FILLER_WORDS: frozenset[str] = frozenset({
+    "me", "about", "the", "a", "an", "of", "in", "for",
 })
 
 # ── Conjunction pattern for compound-query detection ─────────────────────────
@@ -188,6 +231,38 @@ def _is_vague_query(query: str) -> bool:
 def _is_compound_query(query: str) -> bool:
     """Return True if *query* contains a conjunction suggesting multiple parts."""
     return bool(_COMPOUND_RE.search(query))
+
+
+def _extract_query_topic(query: str) -> str | None:
+    """Extract the main noun/topic from a query for memory storage.
+
+    Used when no knowledge base topic is matched (LLM Fallback mode) so that
+    follow-up questions can still resolve pronouns and topic references.
+
+    Strategy:
+    1. Remove common question words: what, is, are, how, does, explain, tell,
+       describe, define, why, where, when.
+    2. Remove filler words: me, about, the, a, an, of, in, for.
+    3. Remove aspect/modifier words: advantages, disadvantages, limitations,
+       examples, applications, uses.
+    4. Return the remaining meaningful phrase (first 3 words max).
+    5. If nothing remains, return None.
+
+    Examples:
+        "what is agriculture"           → "agriculture"
+        "explain the water cycle"       → "water cycle"
+        "how does photosynthesis work"  → "photosynthesis work"
+        "tell me about soil degradation" → "soil degradation"
+        "advantages of farming"         → "farming"
+    """
+    tokens = re.findall(r"\b[a-z0-9]+\b", query.lower())
+    meaningful = [
+        t for t in tokens
+        if t not in _TOPIC_QUESTION_WORDS and t not in _TOPIC_FILLER_WORDS
+    ]
+    if not meaningful:
+        return None
+    return " ".join(meaningful[:3])
 
 
 @dataclass
@@ -371,10 +446,25 @@ class RAGPipeline:
         if is_likely_followup:
             result.log(2, "Follow-up query detected — skipping drift check")
 
+        # Bugfix (Bug 3): detect pure follow-up patterns (e.g. "advantages",
+        # "examples") that carry no topic by themselves.  These must never
+        # trigger drift detection; the last memory topic will be reused.
+        query_stripped = user_query.lower().strip().rstrip("?")
+        is_pure_followup = any(
+            query_stripped == pattern or query_stripped.startswith(pattern)
+            for pattern in _PURE_FOLLOWUP_PATTERNS
+        )
+        if is_pure_followup and memory.get_last_topic():
+            result.log(
+                2,
+                f"Pure follow-up detected — skipping ALL drift checks, "
+                f"using last topic: '{memory.get_last_topic()}'",
+            )
+
         # Compare the current query to the last conversation turn.  If the
         # similarity is below the threshold the user has shifted to an
         # unrelated topic: clear context and answer directly from the LLM.
-        if memory.history and not is_likely_followup:
+        if memory.history and not (is_likely_followup or (is_pure_followup and memory.get_last_topic())):
             last_turn = list(memory.history)[-1]
             last_context_text = last_turn.user_query
             if last_turn.resolved_topic:
@@ -441,12 +531,17 @@ class RAGPipeline:
                     f"clarifications={_pipeline_stats['clarifications_requested']}",
                 )
 
-                # Record the turn so future turns have a reference point
+                # Bugfix (Bug 2): extract topic from query even for out-of-scope
+                # questions so follow-up turns can resolve pronoun/topic references.
+                fallback_topic = _extract_query_topic(user_query)
                 memory.add_turn(
                     user_query=user_query,
-                    resolved_topic=None,
+                    resolved_topic=fallback_topic,
                     answer_snippet=result.answer[:120],
                 )
+                if topic_manager is not None:
+                    topic_manager.update(fallback_topic)
+                result.detected_topic = fallback_topic
                 return result
 
         # ── Step 2b: Out-of-scope pre-validation ──────────────────────────────
@@ -673,9 +768,17 @@ class RAGPipeline:
             top_score = 0.0
 
         result.retrieval_score = top_score
-        result.mode = "RAG" if top_score >= RAG_SIMILARITY_THRESHOLD else "LLM Fallback"
+        # Bugfix (Bug 1): Three-mode decision instead of two.
+        # Partial RAG uses retrieved docs even when score is below the full
+        # RAG threshold, rather than discarding them entirely.
+        if top_score >= RAG_SIMILARITY_THRESHOLD:
+            result.mode = "RAG"
+        elif top_score >= PARTIAL_RAG_THRESHOLD and retrieved:
+            result.mode = "Partial RAG"
+        else:
+            result.mode = "LLM Fallback"
         result.tag_log("Retrieval Score", f"{top_score:.4f} (threshold: {RAG_SIMILARITY_THRESHOLD})")
-        result.tag_log("Mode", result.mode)
+        result.tag_log("Mode", f"{result.mode} (score={top_score:.3f})")
 
         # ── Step 8: Top-K document selection ──────────────────────────────────
         result.retrieved_docs = retrieved[: self.top_k]
@@ -697,6 +800,19 @@ class RAGPipeline:
             )
             prompt_text = RAG_PROMPT.format(context=context, question=user_query)
             result.log(9, "Mode RAG: sending context + question to Phi-3 via Ollama …")
+        elif result.mode == "Partial RAG":
+            # Bugfix (Bug 1): use retrieved docs even when score is below the
+            # full RAG threshold instead of discarding them entirely.
+            context = "\n\n".join(
+                f"[Doc {i+1}] {doc.page_content}"
+                for i, doc in enumerate(result.retrieved_docs)
+            )
+            prompt_text = PARTIAL_CONTEXT_PROMPT.format(context=context, question=user_query)
+            result.log(
+                9,
+                "Mode Partial RAG: partial context sent to Phi-3 "
+                "(score below RAG threshold but above partial threshold) …",
+            )
         else:
             _pipeline_stats["fallback_triggers"] += 1
             if _is_vague_query(user_query):
@@ -781,13 +897,26 @@ class RAGPipeline:
         )
 
         # ── Update memory and topic manager ───────────────────────────────────
-        memory.add_turn(
-            user_query=user_query,
-            resolved_topic=final_topic,
-            answer_snippet=result.answer[:120],
-        )
-        if topic_manager is not None:
-            topic_manager.update(final_topic)
+        # Bugfix (Bug 2): for LLM Fallback, extract a topic from the raw query
+        # so follow-up turns can resolve "it"/"advantages of it" etc. correctly.
+        if result.mode == "LLM Fallback":
+            fallback_topic = _extract_query_topic(user_query) or final_topic
+            memory.add_turn(
+                user_query=user_query,
+                resolved_topic=fallback_topic,
+                answer_snippet=result.answer[:120],
+            )
+            if topic_manager is not None:
+                topic_manager.update(fallback_topic)
+            result.detected_topic = fallback_topic
+        else:
+            memory.add_turn(
+                user_query=user_query,
+                resolved_topic=final_topic,
+                answer_snippet=result.answer[:120],
+            )
+            if topic_manager is not None:
+                topic_manager.update(final_topic)
 
         return result
 
