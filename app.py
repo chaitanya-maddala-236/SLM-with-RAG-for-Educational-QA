@@ -28,18 +28,33 @@ from context_memory import ConversationMemory
 from topic_memory_manager import TopicMemoryManager
 from retriever import build_vector_store
 from rag_pipeline import RAGPipeline
+# Embedding support: import embedding config for the sidebar selector
+from research_config import EMBEDDING_MODELS, DEFAULT_EMBEDDING
+
 # ── Cached resources (load once, reuse across reruns) ────────────────────────
 
-@st.cache_resource(show_spinner="🔧 Building vector store (first run only)…")
-def load_vector_store() -> Chroma:
-    """Load or build the Chroma vector store with BGE embeddings."""
-    return build_vector_store(persist=True)
+# Embedding support: cache separately per embedding_name (Streamlit caches by args)
+@st.cache_resource(show_spinner="🔧 Building vector store...")
+def load_vector_store(embedding_name: str = DEFAULT_EMBEDDING) -> Chroma:
+    """Load or build the Chroma vector store for the given embedding model."""
+    return build_vector_store(persist=True, embedding_name=embedding_name)
 
 
 @st.cache_resource(show_spinner="🤖 Loading model via Ollama…")
-def load_pipeline(_vector_store: Chroma, model_name: str = "phi3") -> RAGPipeline:
+def load_pipeline(
+    _vector_store: Chroma,
+    model_name: str,
+    retrieval_mode: str,
+    top_k: int,
+    embedding_name: str,
+) -> RAGPipeline:
     """Initialise the RAG pipeline (model connection check)."""
-    return RAGPipeline(vector_store=_vector_store, model_name=model_name, top_k=5)
+    return RAGPipeline(
+        vector_store=_vector_store,
+        model_name=model_name,
+        retrieval_mode=retrieval_mode,
+        top_k=top_k,
+    )
 
 
 # ── Session state initialisation ──────────────────────────────────────────────
@@ -57,11 +72,20 @@ def init_session_state() -> None:
         st.session_state.last_metrics = {}
     if "last_result_meta" not in st.session_state:
         st.session_state.last_result_meta = {}
+    # Embedding support: persist selected embedding across reruns
+    if "selected_embedding" not in st.session_state:
+        st.session_state.selected_embedding = DEFAULT_EMBEDDING
+    if "selected_model" not in st.session_state:
+        st.session_state.selected_model = "phi3"
+    if "selected_retrieval" not in st.session_state:
+        st.session_state.selected_retrieval = "hybrid"
+    if "selected_topk" not in st.session_state:
+        st.session_state.selected_topk = 5
 
 
 # ── Sidebar: Controls only ────────────────────────────────────────────────────
 
-def render_controls() -> str:
+def render_controls() -> tuple[str, str, str, int]:
     with st.sidebar:
         st.title("⚙️ Controls")
         if st.button("🗑️ Clear Conversation", use_container_width=True):
@@ -82,10 +106,40 @@ def render_controls() -> str:
             help="Must be installed via: ollama pull <model>",
         )
 
+        selected_retrieval = st.selectbox(
+            "Retrieval Mode",
+            ["hybrid", "vector_only", "bm25_only"],
+            index=0,
+            help="How documents are retrieved from the vector store",
+        )
+
+        selected_topk = st.slider(
+            "Top-K Documents",
+            min_value=1,
+            max_value=10,
+            value=5,
+            help="Number of documents to retrieve per query",
+        )
+
         st.divider()
-        st.caption(
-            f"**Stack:** {selected_model} · BGE-small · Chroma · LangChain\n\n"
-            f"Ensure Ollama is running:\n```\nollama serve\nollama pull {selected_model}\n```"
+        st.subheader("🔢 Embedding Model")
+        # Embedding support: let the user pick which embedding to use
+        emb_names = [e["name"] for e in EMBEDDING_MODELS]
+        selected_embedding = st.selectbox(
+            "Embedding Model",
+            emb_names,
+            index=emb_names.index(DEFAULT_EMBEDDING),
+            help="Each embedding builds its own vector store on first use",
+        )
+
+        st.divider()
+        # Embedding support: show active configuration at a glance
+        st.info(
+            f"**Active Config**\n\n"
+            f"Model: `{selected_model}`\n\n"
+            f"Embedding: `{selected_embedding}`\n\n"
+            f"Retrieval: `{selected_retrieval}`\n\n"
+            f"Top-K: `{selected_topk}`"
         )
 
         st.divider()
@@ -105,7 +159,7 @@ def render_controls() -> str:
                 """
             )
 
-        return selected_model
+        return selected_model, selected_retrieval, selected_topk, selected_embedding
 
 
 # ── Right panel: pipeline viewer + evaluation table ───────────────────────────
@@ -235,10 +289,10 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
 
 # ── Chat column ───────────────────────────────────────────────────────────────
 
-def render_chat_column(pipeline: RAGPipeline) -> None:
+def render_chat_column(pipeline: RAGPipeline, embedding_name: str = DEFAULT_EMBEDDING) -> None:
     st.title("🎓 EduRAG — Educational Conversational QA")
     st.caption(
-        f"Powered by {pipeline.model_name} (Ollama) · BGE Embeddings · Chroma · LangChain  \n"
+        f"Powered by {pipeline.model_name} (Ollama) · {embedding_name} Embeddings · Chroma · LangChain  \n"
         "Topics: water cycle · carbon cycle · bicycle · photosynthesis"
     )
 
@@ -305,18 +359,30 @@ def render_chat_column(pipeline: RAGPipeline) -> None:
 def main() -> None:
     init_session_state()
 
-    # Sidebar: controls + model selection
-    selected_model = render_controls()
+    # Sidebar: controls + model/embedding/retrieval selection
+    selected_model, selected_retrieval, selected_topk, selected_embedding = render_controls()
 
-    # Load resources (pipeline is cached per model_name)
-    vector_store = load_vector_store()
-    pipeline = load_pipeline(vector_store, selected_model)
+    # Persist selections to session state
+    st.session_state.selected_model = selected_model
+    st.session_state.selected_retrieval = selected_retrieval
+    st.session_state.selected_topk = selected_topk
+    st.session_state.selected_embedding = selected_embedding
+
+    # Embedding support: load vector store and pipeline keyed on embedding
+    vector_store = load_vector_store(st.session_state.selected_embedding)
+    pipeline = load_pipeline(
+        vector_store,
+        st.session_state.selected_model,
+        st.session_state.selected_retrieval,
+        st.session_state.selected_topk,
+        st.session_state.selected_embedding,
+    )
 
     # Main area: chat (left) | pipeline + metrics (right)
     chat_col, right_col = st.columns([3, 2], gap="large")
 
     with chat_col:
-        render_chat_column(pipeline)
+        render_chat_column(pipeline, st.session_state.selected_embedding)
 
     with right_col:
         render_right_panel(
