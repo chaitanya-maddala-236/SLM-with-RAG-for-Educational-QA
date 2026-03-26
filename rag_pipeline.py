@@ -73,6 +73,7 @@ from retriever import (
     build_bm25_index,
     hybrid_search,
     hierarchical_retrieve,
+    retrieve_top_k,
     BM25Index,
 )
 from evaluation import compute_all_metrics
@@ -284,6 +285,7 @@ class PipelineResult:
     mode: str = "RAG"
     token_counts: dict[str, int] = field(default_factory=dict)
     context_similarity: float | None = None
+    latency_ms: float = 0.0
 
     def log(self, step: int, message: str) -> None:
         entry = f"[Step {step:>2}] {message}"
@@ -310,10 +312,12 @@ class RAGPipeline:
         vector_store: Chroma,
         model_name: str = "phi3",
         top_k: int = TOP_K,
+        retrieval_mode: str = "hybrid",
     ) -> None:
         self.vector_store = vector_store
         self.top_k = top_k
         self.model_name = model_name  # Bugfix: store for MLflow logging
+        self.retrieval_mode = retrieval_mode
         self.llm = OllamaLLM(model=model_name, temperature=0.1)
         self._ctx_builder = ContextualQueryBuilder()
         # Embedding function reused for context-similarity checks
@@ -367,6 +371,9 @@ class RAGPipeline:
         Returns:
             PipelineResult with answer, metrics, and step log.
         """
+        import time as _time
+        _run_start = _time.time()
+
         result = PipelineResult(
             query=user_query,
             rewritten_query=user_query,
@@ -542,6 +549,7 @@ class RAGPipeline:
                 if topic_manager is not None:
                     topic_manager.update(fallback_topic)
                 result.detected_topic = fallback_topic
+                result.latency_ms = (_time.time() - _run_start) * 1000
                 return result
 
         # ── Step 2b: Out-of-scope pre-validation ──────────────────────────────
@@ -577,6 +585,7 @@ class RAGPipeline:
                 resolved_topic=None,
                 answer_snippet=result.answer[:120],
             )
+            result.latency_ms = (_time.time() - _run_start) * 1000
             return result
 
         # ── Step 3: Contextual Query Builder ──────────────────────────────────
@@ -690,6 +699,7 @@ class RAGPipeline:
         if needs_clarification:
             _pipeline_stats["clarifications_requested"] += 1
             memory.add_turn(user_query=user_query, resolved_topic=None)
+            result.latency_ms = (_time.time() - _run_start) * 1000
             return result
 
         # ── Compound-query detection (log only; LLM handles both parts) ────────
@@ -742,20 +752,31 @@ class RAGPipeline:
         retrieval_query = enriched_query
         result.rewritten_query = retrieval_query
 
-        # ── Step 7: Hierarchical retrieval (topic-route → hybrid BM25+vector) ──
+        # ── Step 7: Retrieval (mode: hybrid / vector_only / bm25_only) ──────────
         result.log(
             7,
-            f"Hierarchical retrieval (top-{RETRIEVAL_CANDIDATES} candidates, "
-            f"hybrid BM25+vector) on: '{retrieval_query}' "
+            f"Retrieval mode={self.retrieval_mode} "
+            f"(top-{RETRIEVAL_CANDIDATES} candidates) on: '{retrieval_query}' "
             f"| topic route: '{final_topic or 'none'}'",
         )
-        retrieved = hierarchical_retrieve(
-            vector_store=self.vector_store,
-            bm25_index=self._bm25_index,
-            query=retrieval_query,
-            topic=final_topic,
-            k=self.top_k,
-        )
+        if self.retrieval_mode == "vector_only":
+            retrieved = retrieve_top_k(
+                self.vector_store,
+                retrieval_query,
+                k=self.top_k,
+                topic_filter=final_topic,
+            )
+        elif self.retrieval_mode == "bm25_only" and self._bm25_index is not None:
+            bm25_hits = self._bm25_index.search(retrieval_query, k=self.top_k)
+            retrieved = [doc for doc, _ in bm25_hits]
+        else:  # "hybrid" (default) or bm25_only fallback when index unavailable
+            retrieved = hierarchical_retrieve(
+                vector_store=self.vector_store,
+                bm25_index=self._bm25_index,
+                query=retrieval_query,
+                topic=final_topic,
+                k=self.top_k,
+            )
         result.log(7, f"Retrieved {len(retrieved)} document(s) after reranking.")
 
         # ── Determine retrieval similarity score and pipeline mode ────────────
@@ -875,10 +896,7 @@ class RAGPipeline:
                 with _mlflow.start_run(run_name=f"{self.model_name}_top{self.top_k}"):
                     _mlflow.log_param("model", self.model_name)
                     _mlflow.log_param("top_k", self.top_k)
-                    _mlflow.log_param(
-                        "retrieval_mode",
-                        "hybrid" if self._bm25_index is not None else "vector",
-                    )
+                    _mlflow.log_param("retrieval_mode", self.retrieval_mode)
                     _mlflow.log_param("pipeline_mode", result.mode)
                     _mlflow.log_param("query_topic", str(final_topic))
                     for metric_name, metric_value in result.metrics.items():
@@ -918,6 +936,7 @@ class RAGPipeline:
             if topic_manager is not None:
                 topic_manager.update(final_topic)
 
+        result.latency_ms = (_time.time() - _run_start) * 1000
         return result
 
 
