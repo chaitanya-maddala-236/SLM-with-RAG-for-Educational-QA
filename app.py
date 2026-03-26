@@ -36,10 +36,10 @@ def load_vector_store() -> Chroma:
     return build_vector_store(persist=True)
 
 
-@st.cache_resource(show_spinner="🤖 Connecting to Phi-3 via Ollama…")
-def load_pipeline(_vector_store: Chroma) -> RAGPipeline:
+@st.cache_resource(show_spinner="🤖 Loading model via Ollama…")
+def load_pipeline(_vector_store: Chroma, model_name: str = "phi3") -> RAGPipeline:
     """Initialise the RAG pipeline (model connection check)."""
-    return RAGPipeline(vector_store=_vector_store, model_name="phi3", top_k=5)
+    return RAGPipeline(vector_store=_vector_store, model_name=model_name, top_k=5)
 
 
 # ── Session state initialisation ──────────────────────────────────────────────
@@ -61,7 +61,7 @@ def init_session_state() -> None:
 
 # ── Sidebar: Controls only ────────────────────────────────────────────────────
 
-def render_controls() -> None:
+def render_controls() -> str:
     with st.sidebar:
         st.title("⚙️ Controls")
         if st.button("🗑️ Clear Conversation", use_container_width=True):
@@ -74,9 +74,18 @@ def render_controls() -> None:
             st.rerun()
 
         st.divider()
+        st.subheader("🤖 Model Settings")
+        selected_model = st.selectbox(
+            "SLM Model",
+            ["phi3", "tinyllama", "llama3.2", "mistral"],
+            index=0,
+            help="Must be installed via: ollama pull <model>",
+        )
+
+        st.divider()
         st.caption(
-            "**Stack:** Phi-3 · BGE-small · Chroma · LangChain\n\n"
-            "Ensure Ollama is running:\n```\nollama serve\nollama pull phi3\n```"
+            f"**Stack:** {selected_model} · BGE-small · Chroma · LangChain\n\n"
+            f"Ensure Ollama is running:\n```\nollama serve\nollama pull {selected_model}\n```"
         )
 
         st.divider()
@@ -95,6 +104,8 @@ def render_controls() -> None:
 - `What causes carbon emissions?`
                 """
             )
+
+        return selected_model
 
 
 # ── Right panel: pipeline viewer + evaluation table ───────────────────────────
@@ -227,7 +238,7 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
 def render_chat_column(pipeline: RAGPipeline) -> None:
     st.title("🎓 EduRAG — Educational Conversational QA")
     st.caption(
-        "Powered by Phi-3 (Ollama) · BGE Embeddings · Chroma · LangChain  \n"
+        f"Powered by {pipeline.model_name} (Ollama) · BGE Embeddings · Chroma · LangChain  \n"
         "Topics: water cycle · carbon cycle · bicycle · photosynthesis"
     )
 
@@ -294,12 +305,12 @@ def render_chat_column(pipeline: RAGPipeline) -> None:
 def main() -> None:
     init_session_state()
 
-    # Load resources
-    vector_store = load_vector_store()
-    pipeline = load_pipeline(vector_store)
+    # Sidebar: controls + model selection
+    selected_model = render_controls()
 
-    # Sidebar: controls + stack info
-    render_controls()
+    # Load resources (pipeline is cached per model_name)
+    vector_store = load_vector_store()
+    pipeline = load_pipeline(vector_store, selected_model)
 
     # Main area: chat (left) | pipeline + metrics (right)
     chat_col, right_col = st.columns([3, 2], gap="large")
