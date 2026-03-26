@@ -16,6 +16,7 @@
 - [Knowledge Base](#-knowledge-base)
 - [Evaluation Metrics](#-evaluation-metrics)
 - [Project Structure](#-project-structure)
+- [Module Documentation](#-module-documentation)
 - [Setup & Installation](#-setup--installation)
 - [Running the App](#-running-the-app)
 - [Example Conversation Flows](#-example-conversation-flows)
@@ -684,6 +685,324 @@ EduSLM-RAG/
 
 ---
 
+## 📖 Module Documentation
+
+This section documents every Python module in the project — its responsibility, key classes and functions, and how it fits into the overall pipeline.
+
+---
+
+### `app.py` — Streamlit Web Interface
+
+**Purpose:** Provides the interactive browser-based UI for the entire system. Renders the chat interface, the step-by-step pipeline viewer, and the per-query evaluation metrics table.
+
+**Layout:**
+- **Left sidebar** — model selector (Phi-3, TinyLlama, LLaMA 3.2, Mistral), clear-conversation button, example queries.
+- **Left column (60 %)** — conversational chat display with user and assistant turns.
+- **Right column (40 %)** — pipeline step log with tagged icons, and a live evaluation metrics table.
+
+**Key functions:**
+
+| Function | Description |
+|---|---|
+| `load_vector_store()` | Cached: builds or reloads the Chroma vector store via `retriever.build_vector_store()`. Runs once per session. |
+| `load_pipeline(vector_store, model_name)` | Cached: initialises `RAGPipeline` with the chosen SLM. Re-runs when the model selection changes. |
+| `init_session_state()` | Sets up Streamlit session keys: `chat_history`, `memory_data`, `topic_manager_data`, `last_step_log`, `last_metrics`. |
+| `render_controls()` | Draws the sidebar controls and returns the currently selected model name. |
+| `render_chat(pipeline, memory, topic_manager)` | Handles user input, calls `pipeline.run()`, appends the result to chat history, and re-renders the full conversation. |
+| `render_pipeline_steps(step_log)` | Formats the `PipelineResult.step_log` list with emoji icons matched by log-tag prefix (`[Query]`, `[Mode]`, etc.). |
+| `render_metrics(metrics)` | Renders a colour-coded table (✓ / ⚠ / ✗) for the 6 evaluation metrics. |
+
+**Run with:**
+```bash
+streamlit run app.py
+```
+
+---
+
+### `main.py` — Command-Line Entry Point
+
+**Purpose:** A script-based alternative to the Streamlit UI. Runs a pre-defined demonstration conversation and prints all pipeline debug output to the terminal. Also exposes an `--ablation` flag for retrieval-mode comparison experiments.
+
+**Demo queries (6):** Water cycle explanation → ambiguous "cycle" (resolved via memory) → "How does a cycle move?" (topic shift to bicycle) → photosynthesis → Calvin cycle → bicycle gears.
+
+**Key functions:**
+
+| Function | Description |
+|---|---|
+| `run_demo()` | Executes `DEMO_QUERIES` one by one through the full pipeline, printing per-step logs and a final averaged evaluation metrics table. |
+| `run_ablation()` | Runs `ABLATION_QUERIES` three times — once each in `vector_only`, `bm25_only`, and `hybrid` retrieval modes — and prints a comparative metrics summary. |
+
+**Usage:**
+```bash
+python main.py              # demo conversation (default)
+python main.py --ablation   # retrieval ablation study
+```
+
+---
+
+### `rag_pipeline.py` — 10-Step Pipeline Orchestrator
+
+**Purpose:** The central module that wires all components together. Every user query passes through exactly 10 ordered steps: receive → memory → query building → ambiguity → classification → glossary → retrieval → top-K selection → answer generation → evaluation/memory update.
+
+**Key classes:**
+
+| Class / Function | Description |
+|---|---|
+| `PipelineResult` | Dataclass returned by `RAGPipeline.run()`. Fields: `answer`, `step_log` (list of debug strings), `metrics` (dict), `latency_ms`, `mode` (`"RAG"` or `"LLM Fallback"`), `retrieved_docs`, `resolved_topic`. |
+| `RAGPipeline` | Main orchestrator. Constructor: `RAGPipeline(vector_store, model_name, top_k, retrieval_mode)`. |
+| `RAGPipeline.run(query, memory, topic_manager)` | Executes all 10 steps and returns a `PipelineResult`. Records wall-clock latency on all return paths. |
+| `RAGPipeline.run_with_mode(query, memory, topic_manager, mode)` | Same as `run()` but forces a specific retrieval mode (`hybrid`, `vector_only`, `bm25_only`). Used by the ablation study. |
+
+**Important constants (tunable):**
+
+```python
+RAG_SIMILARITY_THRESHOLD  = 0.6   # Below this → LLM Fallback mode
+RETRIEVAL_CANDIDATES      = 20    # Candidate pool size before top-K selection
+TOP_K                     = 5     # Documents passed to the LLM prompt
+```
+
+**Optional integrations:** MLflow experiment tracking (auto-detected; skipped silently if `mlflow` is not installed).
+
+---
+
+### `contextual_query_builder.py` — Contextual Query Builder
+
+**Purpose:** The core NLP pre-processing module. Transforms a raw user query into a clean, unambiguous, context-enriched search string before it reaches the retriever.
+
+**Key classes:**
+
+| Class | Description |
+|---|---|
+| `QueryNormalizer` | Lowercases input, expands contractions (`don't` → `do not`), strips stray punctuation. |
+| `TopicConfidenceScorer` | Scans query for weighted topic keywords. Returns a `{topic: score}` dict. A score ≥ `TOPIC_SWITCH_THRESHOLD` (default 2.0) means the query is explicitly about that topic. |
+| `TopicShiftDetector` | **The core innovation.** Detects whether the current query has moved to a new topic, preventing context contamination. Uses a 5-step algorithm: keyword match against memory topic → non-ambiguous content words → cross-topic match → unknown-domain word detection → shift verdict. |
+| `AmbiguityResolver` | Resolves ambiguous terms (e.g. `"cycle"`) using priority order: (1) high-confidence query keywords, (2) in-query disambiguation signals, (3) conversation memory (only if no shift detected), (4) unresolved. |
+| `ContextualQueryBuilder` | Orchestrator. Calls the above in sequence and returns a `ContextualQueryResult` with `rewritten_query`, `resolved_topic`, `confidence`, and debug metadata. |
+
+**Key constants:**
+
+```python
+TOPIC_SWITCH_THRESHOLD          = 2.0   # Min keyword score to override memory
+MIN_DOMAIN_SPECIFIC_WORD_LENGTH = 5     # Words shorter than this are ignored by shift detector
+TOPICS                                  # List of 18 canonical topic names
+```
+
+---
+
+### `context_memory.py` — Conversation Memory
+
+**Purpose:** Stores the last N conversation turns in a sliding window. Each turn records the raw user query, the resolved topic, and a short answer snippet. Provides helper methods to retrieve recent topics for ambiguity resolution.
+
+**Key classes:**
+
+| Class / Method | Description |
+|---|---|
+| `Turn` | Dataclass: `user_query`, `resolved_topic`, `answer_snippet` (first 120 chars). |
+| `ConversationMemory(max_turns)` | Maintains a `deque` of up to `max_turns` (default 5) `Turn` objects. |
+| `add_turn(query, topic, snippet)` | Appends a completed turn to the history. |
+| `get_recent_topics(n)` | Returns the `n` most recently resolved topics (most recent first). |
+| `get_last_topic()` | Convenience wrapper — returns the single most recent topic, or `None`. |
+| `get_context_string()` | Returns a human-readable summary of the recent turns, used for prompt injection. |
+| `to_list() / from_list()` | Serialise / deserialise to a plain list for Streamlit session state persistence. |
+
+---
+
+### `topic_memory_manager.py` — Topic Confidence Tracker
+
+**Purpose:** Maintains a registry of topics that have appeared in the conversation, with a **confidence decay model**. Prevents stale topics from persisting when the user has clearly moved on.
+
+**Key classes:**
+
+| Class / Method | Description |
+|---|---|
+| `TopicRecord` | Dataclass: `topic`, `frequency` (turns with mention), `last_turn`, `confidence` ∈ [0, 1]. |
+| `TopicMemoryManager` | Maintains `_registry: dict[str, TopicRecord]` and a turn counter. |
+| `update(topic)` | Advances the turn counter. If `topic` is not `None`, resets its confidence to 1.0 and increments frequency. All other topics lose `DECAY_RATE` (0.25) confidence. |
+| `get_active_topic()` | Returns the topic with the highest confidence above `ACTIVE_THRESHOLD` (0.30), tie-broken by frequency. Returns `None` when all topics have decayed below the threshold. |
+| `to_dict() / from_dict()` | Serialise / deserialise for Streamlit session state persistence. |
+
+---
+
+### `retriever.py` — Retrieval Stack
+
+**Purpose:** Builds and manages the Chroma vector store, and provides all retrieval functions used by the pipeline. Implements vector search, BM25 keyword search, score-merging hybrid search, token-overlap reranking, and hierarchical topic-routed retrieval.
+
+**Key functions / classes:**
+
+| Function / Class | Description |
+|---|---|
+| `build_vector_store(persist)` | Initialises (or reloads) the Chroma collection. On first run, calls `get_texts_and_metadatas()`, splits documents into chunks (`chunk_size=400, overlap=50`), embeds with BGE, and persists to `./chroma_db/`. |
+| `BM25Index` | Wraps `rank_bm25.BM25Okapi`. Tokenises corpus at build time, filtering stop-words. `search(query, k)` returns the top-k `Document` objects by BM25 score. |
+| `build_bm25_index(docs)` | Factory — constructs a `BM25Index` from a list of `Document` objects. |
+| `retrieve_top_k(query, store, k, filter)` | Baseline vector-only retrieval using Chroma cosine similarity with optional metadata `filter`. |
+| `rerank_documents(query, docs, topic, k)` | Scores each candidate by `token_overlap(query, doc) + TOPIC_MATCH_BONUS` (if topic metadata matches). Penalises short chunks (< 40 chars). Returns top-k. |
+| `hybrid_search(query, store, bm25, k, filter)` | Collects `k × CANDIDATE_POOL_MULTIPLIER` candidates from both BM25 and vector search, normalises scores to [0, 1], merges with `combined = 0.5 × BM25 + 0.5 × vector`, then reranks to top-k. |
+| `hierarchical_retrieve(query, store, bm25, topic, k)` | Stage 1: runs `hybrid_search` with a topic metadata filter. If fewer than 2 results, falls back to full-corpus hybrid search (Stage 2). |
+
+**Key constants:**
+
+```python
+CHROMA_PERSIST_DIR        = "./chroma_db"
+CHUNK_SIZE                = 400    # Characters per chunk
+CHUNK_OVERLAP             = 50     # Overlap between chunks
+TOPIC_MATCH_BONUS         = 0.3    # Extra reranker score for topic-matching docs
+CANDIDATE_POOL_MULTIPLIER = 4      # Candidate pool = top_k × 4 before reranking
+```
+
+---
+
+### `embeddings.py` — Embedding Model
+
+**Purpose:** Initialises and returns the BGE (BAAI General Embedding) model wrapped for use with LangChain and Chroma. Provides a single factory function used throughout the retrieval stack.
+
+**Key function:**
+
+| Function | Description |
+|---|---|
+| `get_bge_embeddings(model_name)` | Loads `BAAI/bge-small-en-v1.5` (default) via `HuggingFaceEmbeddings`. Sets `normalize_embeddings=True` for cosine similarity. Can be switched to `bge-base` for higher accuracy at the cost of speed. Pass `device="cuda"` in `model_kwargs` to use a GPU. |
+
+---
+
+### `query_classifier.py` — Query Classifier
+
+**Purpose:** Assigns a **subject** (e.g. `"biology"`, `"physics"`, `"mathematics"`) and detects the most likely **topic** (e.g. `"photosynthesis"`, `"trigonometry"`) from the query text using lightweight keyword heuristics — no model inference required.
+
+**Key functions:**
+
+| Function | Description |
+|---|---|
+| `classify_query(query)` | Returns `(subject: str, topic: str | None)`. Scans `SUBJECT_KEYWORDS` and `TOPIC_KEYWORDS` for the highest-scoring match. |
+| `detect_topic_shift(query, last_topic)` | Returns `True` if the query's top-scoring topic differs from `last_topic` by more than a small margin. Used as a lightweight pre-check before `TopicShiftDetector`. |
+
+**Subject categories covered:** geography, biology, environmental science, physics, transportation, mathematics, technology, chemistry, health science, history, arts.
+
+---
+
+### `glossary_mapper.py` — Glossary and Synonym Mapper
+
+**Purpose:** Provides three data structures and one utility function used across the pipeline to enrich queries and resolve ambiguous terms.
+
+**Key exports:**
+
+| Export | Type | Description |
+|---|---|---|
+| `TOPICS` | `list[str]` | Canonical list of 18 topic names (single source of truth shared with `query_classifier.py` and `contextual_query_builder.py`). |
+| `AMBIGUOUS_TERMS` | `dict[str, list[str]]` | Maps a word to the list of topics it could refer to (e.g. `"cycle"` → `["water cycle", "carbon cycle", "bicycle"]`). |
+| `GLOSSARY` | `dict[str, str]` | Maps synonym/alias to canonical topic (e.g. `"hydrological cycle"` → `"water cycle"`). |
+| `DISAMBIGUATION_SIGNALS` | `dict[str, str]` | Maps an in-query signal word to a definitive topic (e.g. `"pedal"` → `"bicycle"`, `"chlorophyll"` → `"photosynthesis"`). |
+| `OUT_OF_SCOPE_SIGNALS` | `set[str]` | Words that indicate the query is outside the knowledge base (e.g. `"politics"`, `"sports"`). |
+| `expand_query(query)` | function | Replaces glossary synonyms in the query with their canonical topic name to improve retrieval. |
+| `get_ambiguous_terms(query)` | function | Returns all ambiguous words found in the query. |
+| `disambiguate_with_signals(query, ambiguous_term)` | function | Checks for disambiguation signals in the query to pick the most likely topic for an ambiguous term. |
+
+---
+
+### `data_loader.py` — Educational Knowledge Base
+
+**Purpose:** Defines the core educational document corpus and provides chunked texts and metadata for ingestion into the vector store.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `EDUCATIONAL_DOCUMENTS` | List of 14 base documents spanning 4 topics (water cycle, carbon cycle, bicycle, photosynthesis) with `text`, `subject`, `topic`, and `grade` fields. |
+| `get_texts_and_metadatas()` | Returns `(texts: list[str], metadatas: list[dict])` after merging base documents with `EXTENDED_DOCUMENTS_V2` and `EXTENDED_DOCUMENTS_V3`. Called by `retriever.build_vector_store()`. |
+| `get_chunked_texts_and_metadatas(chunk_size, chunk_overlap)` | Same as above but splits long documents using `RecursiveCharacterTextSplitter` before returning. Default `chunk_size=400`, `chunk_overlap=50`. |
+
+---
+
+### `extended_corpus_v2.py` — Extended Corpus V2
+
+**Purpose:** Provides `EXTENDED_DOCUMENTS_V2` — a list of 5 000+ additional educational documents covering 150+ topics across grades 4–12 in multiple subjects (science, mathematics, geography, history, technology, arts). Imported by `data_loader.py` to augment the base knowledge base.
+
+**Topics added (selection):** human reproduction, DNA replication, protein synthesis, cellular respiration, osmosis, diffusion, ecosystems, quantum mechanics, astrophysics, organic chemistry, number theory, complex numbers, matrices, financial mathematics, cybersecurity, machine learning, and many more.
+
+---
+
+### `extended_corpus_v3.py` — Extended Corpus V3
+
+**Purpose:** Provides `EXTENDED_DOCUMENTS_V3` — 300+ additional documents that add depth coverage for topics already partially represented in V1/V2, plus new topics. Imported by `data_loader.py`.
+
+**Topics added (selection):** cell structure, mitosis/meiosis, genetics, evolution, electricity, magnetism, EM spectrum, sound waves, trigonometry, circle theorems, data handling, normal distribution, differentiation, integration, urbanisation, climate change solutions, ancient civilisations (Egypt, Greece, Rome), WWI/WWII/Cold War, neural networks, ethical AI, digital privacy, Impressionism, Cubism.
+
+---
+
+### `evaluation.py` — Evaluation Metrics
+
+**Purpose:** Computes all 6 per-query evaluation metrics after every pipeline run. Also optionally wraps the RAGAS evaluation framework for LLM-judge metrics.
+
+**Key functions:**
+
+| Function | Description |
+|---|---|
+| `compute_all_metrics(query, answer, docs, topic)` | Master function. Returns a dict with all 6 metrics below. |
+| `precision_at_k(docs, topic, k)` | Fraction of the top-k retrieved documents whose metadata `topic` matches the resolved topic. |
+| `recall_at_k(docs, topic, k, corpus_size)` | Fraction of all relevant corpus documents that appear in the top-k results. |
+| `mean_reciprocal_rank(docs, topic)` | `1 / rank` of the first relevant document in the retrieved list. |
+| `faithfulness(answer, docs)` | Token-overlap between the generated answer and the concatenated retrieved context. 0.0 in LLM Fallback mode. |
+| `answer_relevance(query, answer)` | Fraction of meaningful query tokens that appear in the answer. |
+| `context_relevance(query, docs)` | Average query-token coverage across all retrieved documents. |
+| `format_metrics_table(metrics)` | Formats a `dict` of metrics into a human-readable console table with ✓/⚠/✗ status symbols. |
+
+**Optional RAGAS metrics** (requires `pip install ragas`): Faithfulness, Answer Relevancy, Context Precision, Context Recall — computed alongside the built-in metrics when RAGAS is available.
+
+---
+
+### `test_queries.py` — Benchmark Test Set
+
+**Purpose:** Defines `TEST_SET`, a curated list of 25+ structured test cases for offline benchmarking of the pipeline. Each test case specifies the input query, expected resolved topic, and expected keywords that should appear in the answer.
+
+**Key export:**
+
+| Export | Description |
+|---|---|
+| `TEST_SET` | `list[dict]` — each entry has `query`, `expected_topic`, `expected_keywords`. Covers all major topics, including follow-up and ambiguous queries. |
+
+**Usage:**
+```bash
+python test_queries.py
+```
+Runs each test case through the pipeline and prints pass/fail results for topic resolution and keyword coverage.
+
+---
+
+### `research_config.py` — Research Evaluation Configuration
+
+**Purpose:** Centralises all configuration for the multi-model, multi-mode research evaluation. Imports from here rather than hard-coding values in `research_evaluator.py`.
+
+**Key exports:**
+
+| Export | Description |
+|---|---|
+| `MODELS_TO_EVALUATE` | `["tinyllama", "phi3", "llama3.2", "mistral"]` |
+| `RETRIEVAL_MODES` | `["vector_only", "bm25_only", "hybrid"]` |
+| `RESULTS_FILE` | `"research_results.txt"` — output file for evaluation results |
+| `TEST_QUERIES` | Structured list of 40+ test queries with `id`, `category`, `query`, `expected_topic`, `expected_keywords`, `expected_mode`, and optional `depends_on` (for multi-turn sequences). |
+
+---
+
+### `research_evaluator.py` — Research Evaluation Runner
+
+**Purpose:** Runs the full pipeline across **all combinations** of models × retrieval modes using the `TEST_QUERIES` suite from `research_config.py`. Writes per-query results and aggregate statistics to `RESULTS_FILE`.
+
+**Key classes and functions:**
+
+| Class / Function | Description |
+|---|---|
+| `QueryResult` | Dataclass: `query_id`, `model`, `mode`, `latency_ms`, `metrics`, `topic_match` (bool), `mode_match` (bool). |
+| `run_evaluation(model, mode)` | Runs all `TEST_QUERIES` through `RAGPipeline` for the given `(model, mode)` pair. Handles multi-turn sequences via `depends_on` chaining. Returns a list of `QueryResult` objects. |
+| `aggregate_results(results)` | Computes mean values for all 6 metrics plus `topic_accuracy`, `mode_accuracy`, and `avg_latency_ms` over a result list. |
+| `write_results(all_results, filepath)` | Formats and writes per-query rows and per-`(model, mode)` aggregate tables to the results file. |
+
+**Usage:**
+```bash
+python research_evaluator.py                            # all models × modes
+python research_evaluator.py --model phi3               # single model, all modes
+python research_evaluator.py --model phi3 --mode hybrid # single combination
+```
+
+---
+
 ## 🚀 Setup & Installation
 
 ### Prerequisites
@@ -1059,6 +1378,8 @@ pip install mlflow
 ollama pull phi3
 ```
 
+> **First run note:** `sentence-transformers` will automatically download the BGE-small model (~130 MB) from HuggingFace. The Chroma vector store is built and persisted to `./chroma_db/` on first run; subsequent runs reuse the cached store.
+
 ### Run the Streamlit Web UI
 
 ```bash
@@ -1082,6 +1403,29 @@ python main.py --ablation
 ```
 
 Compares vector-only, BM25-only, and hybrid retrieval on a fixed query set and prints a side-by-side metrics table.
+
+### Run the Benchmark Test Set
+
+```bash
+python test_queries.py
+```
+
+Executes the 25+ structured test cases from `TEST_SET` through the pipeline and prints pass/fail results for topic resolution and expected keyword coverage.
+
+### Run the Research Evaluator
+
+```bash
+# Evaluate all models across all retrieval modes (writes results to research_results.txt)
+python research_evaluator.py
+
+# Single model, all retrieval modes
+python research_evaluator.py --model phi3
+
+# Single model + single mode
+python research_evaluator.py --model phi3 --mode hybrid
+```
+
+Runs the structured `TEST_QUERIES` suite from `research_config.py` across every configured `(model, retrieval_mode)` combination and writes per-query results plus aggregate statistics to `research_results.txt`.
 
 ### Launch MLflow Dashboard (optional)
 
