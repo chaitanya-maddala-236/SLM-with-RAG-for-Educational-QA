@@ -121,7 +121,13 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
             c2.metric("Subject", subject or "—")
 
         if mode:
-            mode_color = "🟢" if mode == "RAG" else "🟠"
+            # Bugfix: three-colour mode indicator — green (RAG), blue (Partial RAG), orange (fallback)
+            if mode == "RAG":
+                mode_color = "🟢"
+            elif mode == "Partial RAG":
+                mode_color = "🔵"
+            else:
+                mode_color = "🟠"
             score_str = (
                 f"  _(score: {retrieval_score:.3f})_" if retrieval_score is not None else ""
             )
