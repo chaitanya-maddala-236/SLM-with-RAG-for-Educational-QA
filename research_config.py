@@ -5,7 +5,11 @@ Configuration constants and test-query definitions for the research
 evaluation system.
 
 Usage:
-    from research_config import MODELS_TO_EVALUATE, RETRIEVAL_MODES, RESULTS_FILE, TEST_QUERIES
+    from research_config import (
+        MODELS_TO_EVALUATE, RETRIEVAL_MODES, RESULTS_FILE, TEST_QUERIES,
+        EMBEDDING_MODELS, DEFAULT_EMBEDDING,
+        CHROMA_DIR_TEMPLATE, COLLECTION_NAME_TEMPLATE,
+    )
 """
 
 # ── Experiment axes ──────────────────────────────────────────────────────────
@@ -13,6 +17,60 @@ Usage:
 MODELS_TO_EVALUATE = ["tinyllama", "phi3", "llama3.2", "mistral"]
 RETRIEVAL_MODES = ["vector_only", "bm25_only", "hybrid"]
 RESULTS_FILE = "research_results.txt"
+
+# Embedding support: available embedding models for research evaluation
+EMBEDDING_MODELS = [
+    {
+        "name": "bge-small",
+        "model_id": "BAAI/bge-small-en-v1.5",
+        "description": "BGE Small — fast, 384-dim (current default)",
+        "dimension": 384,
+    },
+    {
+        "name": "bge-base",
+        "model_id": "BAAI/bge-base-en-v1.5",
+        "description": "BGE Base — balanced, 768-dim",
+        "dimension": 768,
+    },
+    {
+        "name": "bge-large",
+        "model_id": "BAAI/bge-large-en-v1.5",
+        "description": "BGE Large — highest quality, 1024-dim",
+        "dimension": 1024,
+    },
+    {
+        "name": "minilm",
+        "model_id": "sentence-transformers/all-MiniLM-L6-v2",
+        "description": "MiniLM — very fast, 384-dim",
+        "dimension": 384,
+    },
+    {
+        "name": "mpnet",
+        "model_id": "sentence-transformers/all-mpnet-base-v2",
+        "description": "MPNet — strong general purpose, 768-dim",
+        "dimension": 768,
+    },
+    {
+        "name": "e5-small",
+        "model_id": "intfloat/e5-small-v2",
+        "description": "E5 Small — instruction-tuned, 384-dim",
+        "dimension": 384,
+    },
+    {
+        "name": "e5-base",
+        "model_id": "intfloat/e5-base-v2",
+        "description": "E5 Base — instruction-tuned, 768-dim",
+        "dimension": 768,
+    },
+]
+
+# Default embedding (current system)
+DEFAULT_EMBEDDING = "bge-small"
+
+# Chroma persist directory template
+# Each embedding gets its own collection to avoid dimension mismatch
+CHROMA_DIR_TEMPLATE = "./chroma_db_{embedding_name}"
+COLLECTION_NAME_TEMPLATE = "educational_rag_{embedding_name}"
 
 # ── Structured test-query suite ──────────────────────────────────────────────
 #

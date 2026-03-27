@@ -18,11 +18,11 @@ from collections import defaultdict
 
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
-from embeddings import get_bge_embeddings
-from data_loader import get_texts_and_metadatas
 
-CHROMA_PERSIST_DIR = "./chroma_db"
-COLLECTION_NAME = "educational_rag"
+# Embedding support: use flexible get_embeddings factory
+from embeddings import get_embeddings
+from data_loader import get_texts_and_metadatas
+from research_config import DEFAULT_EMBEDDING, CHROMA_DIR_TEMPLATE, COLLECTION_NAME_TEMPLATE
 
 # ── Chunking constants (used by the scalable retriever) ───────────────────────
 CHUNK_SIZE = 400
@@ -87,27 +87,39 @@ def _token_overlap_score(query: str, doc_text: str) -> float:
 
 # ── Chroma vector store ───────────────────────────────────────────────────────
 
-def build_vector_store(persist: bool = True) -> Chroma:
+def build_vector_store(
+    persist: bool = True,
+    embedding_name: str = DEFAULT_EMBEDDING,
+) -> Chroma:
     """
-    Create (or reload from disk) the Chroma vector store with all educational documents.
+    Create (or reload from disk) the Chroma vector store for a given embedding.
 
-    On first run:  embeds documents and saves to CHROMA_PERSIST_DIR.
+    Each embedding model uses its own persist directory and collection name to
+    avoid dimension-mismatch errors between different embedding spaces.
+
+    On first run for a new embedding: embeds all documents and persists to disk.
     On later runs: loads the persisted store (much faster).
 
     Args:
-        persist: If True, persist the store to disk.
+        persist:        If True, persist the store to disk.
+        embedding_name: Embedding key from EMBEDDING_MODELS (e.g. "bge-small").
 
     Returns:
         Initialised Chroma vector store.
     """
-    embeddings = get_bge_embeddings()
+    # Embedding support: each embedding uses its own directory and collection
+    persist_dir = CHROMA_DIR_TEMPLATE.format(embedding_name=embedding_name)
+    collection = COLLECTION_NAME_TEMPLATE.format(embedding_name=embedding_name)
 
-    if persist and os.path.exists(CHROMA_PERSIST_DIR):
+    print(f"  [Chroma] Using embedding: {embedding_name}")
+    embeddings = get_embeddings(embedding_name)
+
+    if persist and os.path.exists(persist_dir):
         print("  [Chroma] Loading existing vector store from disk...")
         store = Chroma(
-            collection_name=COLLECTION_NAME,
+            collection_name=collection,
             embedding_function=embeddings,
-            persist_directory=CHROMA_PERSIST_DIR,
+            persist_directory=persist_dir,
         )
         # Sanity check: make sure the collection is non-empty
         if store._collection.count() > 0:
@@ -125,8 +137,8 @@ def build_vector_store(persist: bool = True) -> Chroma:
     store = Chroma.from_documents(
         documents=docs,
         embedding=embeddings,
-        collection_name=COLLECTION_NAME,
-        persist_directory=CHROMA_PERSIST_DIR if persist else None,
+        collection_name=collection,
+        persist_directory=persist_dir if persist else None,
     )
 
     return store
