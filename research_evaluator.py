@@ -44,7 +44,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from research_config import (
-    MODELS_TO_EVALUATE,
+    MODEL_REGISTRY,
     RETRIEVAL_MODES,
     RESULTS_FILE,
     TEST_QUERIES,
@@ -57,28 +57,21 @@ from context_memory import ConversationMemory
 from topic_memory_manager import TopicMemoryManager
 
 
-# ── Model registry (cost rates in USD per 1 000 tokens) ──────────────────────
+# ── Model registry helpers ────────────────────────────────────────────────────
 #
-# Allowed hardcoded values: model type labels and cost rate constants.
+# MODEL_REGISTRY is imported from research_config as a list of dicts.
+# Allowed hardcoded values: cost rate constants in research_config.py only.
 # All numeric values in comparison tables must be derived from real results.
-
-MODEL_REGISTRY: dict[str, dict] = {
-    # Local SLMs run via Ollama — zero API cost
-    "tinyllama":    {"type": "SLM", "input_cost_per_1k": 0.0,     "output_cost_per_1k": 0.0},
-    "phi3":         {"type": "SLM", "input_cost_per_1k": 0.0,     "output_cost_per_1k": 0.0},
-    "llama3.2":     {"type": "LLM", "input_cost_per_1k": 0.0,     "output_cost_per_1k": 0.0},
-    "mistral":      {"type": "LLM", "input_cost_per_1k": 0.0,     "output_cost_per_1k": 0.0},
-    # Cloud LLM reference rates (for hypothetical cost comparison)
-    "gpt-4o":       {"type": "LLM", "input_cost_per_1k": 0.005,   "output_cost_per_1k": 0.015},
-    "gpt-3.5-turbo":{"type": "LLM", "input_cost_per_1k": 0.0005,  "output_cost_per_1k": 0.0015},
-}
 
 MIN_ACCURACY: float = 0.0  # Threshold constant — not a table value
 
 
 def get_model_config(model: str) -> dict | None:
     """Return the MODEL_REGISTRY entry for *model*, or None if not found."""
-    return MODEL_REGISTRY.get(model)
+    for cfg in MODEL_REGISTRY:
+        if cfg["name"] == model:
+            return cfg
+    return None
 
 
 # ── QueryResult dataclass ─────────────────────────────────────────────────────
@@ -313,8 +306,8 @@ class ResearchEvaluator:
         # Estimated cost derived from MODEL_REGISTRY rates (0.0 for local models)
         cfg = get_model_config(self.model) or {}
         estimated_cost_usd: float = (
-            input_tokens * cfg.get("input_cost_per_1k", 0.0) / 1000.0
-            + output_tokens * cfg.get("output_cost_per_1k", 0.0) / 1000.0
+            input_tokens * cfg.get("cost_per_1k_input_tokens", 0.0) / 1000.0
+            + output_tokens * cfg.get("cost_per_1k_output_tokens", 0.0) / 1000.0
         )
 
         print(f" → {actual_mode} | topic={actual_topic} | {latency_ms:.0f}ms")
@@ -378,10 +371,13 @@ class ResearchEvaluator:
         """
         Compute aggregate statistics over self.results.
 
-        Errored queries are excluded from metric averages but counted
-        in failed_queries.  Returns all-zero dict if results is empty.
+        Topic and mode accuracy are computed over ALL results (including
+        errored queries).  Keyword coverage uses only successful results with
+        at least one expected keyword.  Latency uses only successful results
+        with a positive latency.  Returns all-zero dict if results is empty.
         """
-        if not self.results:
+        results = self.results
+        if not results:
             return {
                 "total_queries": 0,
                 "successful_queries": 0,
@@ -397,74 +393,91 @@ class ResearchEvaluator:
                 "per_category": {},
             }
 
-        total = len(self.results)
-        errored = [r for r in self.results if r.error]
-        successful = [r for r in self.results if not r.error]
+        successful = [r for r in results if not r.error]
+        failed = [r for r in results if r.error]
 
-        if successful:
-            topic_accuracy = (
-                sum(1 for r in successful if r.topic_correct) / len(successful)
-            )
-            mode_accuracy = (
-                sum(1 for r in successful if r.mode_correct) / len(successful)
-            )
-            avg_keyword_coverage = (
-                sum(r.keyword_coverage for r in successful) / len(successful)
-            )
-            avg_latency_ms = (
-                sum(r.latency_ms for r in successful) / len(successful)
-            )
-        else:
-            topic_accuracy = mode_accuracy = avg_keyword_coverage = avg_latency_ms = 0.0
+        # Topic / mode accuracy — computed over ALL results
+        topic_accuracy = (
+            sum(1 for r in results if r.topic_correct) / len(results)
+        )
+        mode_accuracy = (
+            sum(1 for r in results if r.mode_correct) / len(results)
+        )
 
-        # Average evaluation metrics
-        all_metric_keys: set[str] = set()
-        for r in successful:
-            all_metric_keys.update(r.metrics.keys())
+        # Keyword coverage — successful results that have expected keywords
+        kw_r = [r for r in successful if r.keyword_total > 0]
+        avg_keyword_coverage = (
+            sum(r.keyword_coverage for r in kw_r) / len(kw_r)
+            if kw_r else 0.0
+        )
 
+        # Latency — successful results with a positive latency value
+        lat_r = [r for r in successful if r.latency_ms > 0]
+        avg_latency_ms = (
+            sum(r.latency_ms for r in lat_r) / len(lat_r)
+            if lat_r else 0.0
+        )
+
+        # Average evaluation metrics — successful results only
+        metric_keys = [
+            "Precision@5", "Recall@5", "MRR",
+            "Faithfulness", "Answer Relevance", "Context Relevance",
+        ]
+        metric_r = [r for r in successful if r.metrics]
         avg_metrics: dict[str, float] = {}
-        for key in sorted(all_metric_keys):
-            vals = [r.metrics[key] for r in successful if key in r.metrics]
+        for key in metric_keys:
+            vals = [r.metrics[key] for r in metric_r if key in r.metrics]
+            avg_metrics[key] = round(sum(vals) / len(vals), 3) if vals else 0.0
+        # Include any additional metric keys found in results
+        extra_keys = set()
+        for r in metric_r:
+            extra_keys.update(r.metrics.keys())
+        for key in sorted(extra_keys - set(metric_keys)):
+            vals = [r.metrics[key] for r in metric_r if key in r.metrics]
             avg_metrics[key] = round(sum(vals) / len(vals), 3) if vals else 0.0
 
-        # Mode counts across ALL results (including errors shown as "ERROR")
-        rag_count = sum(1 for r in self.results if r.actual_mode == "RAG")
+        # Mode counts from real results (all results including errors)
+        rag_count = sum(1 for r in results if r.actual_mode == "RAG")
         partial_rag_count = sum(
-            1 for r in self.results if r.actual_mode == "Partial RAG"
+            1 for r in results if r.actual_mode == "Partial RAG"
         )
         fallback_count = sum(
-            1 for r in self.results
+            1 for r in results
             if r.actual_mode in ("LLM Fallback", "Out of Scope")
         )
 
-        # Per-category breakdown (skip errored rows from accuracy denominators)
+        # Per-category breakdown from real results
         categories: dict[str, list[QueryResult]] = {}
-        for r in self.results:
+        for r in results:
             categories.setdefault(r.category, []).append(r)
 
         per_category: dict[str, dict] = {}
-        for cat, rows in categories.items():
-            ok = [r for r in rows if not r.error]
+        for cat, cat_r in categories.items():
+            cat_s = [r for r in cat_r if not r.error]
+            cat_kw = [r for r in cat_s if r.keyword_total > 0]
+            cat_lat = [r for r in cat_s if r.latency_ms > 0]
             per_category[cat] = {
-                "count": len(rows),
-                "topic_accuracy": round(
-                    sum(1 for r in ok if r.topic_correct) / len(ok), 3
-                ) if ok else 0.0,
-                "mode_accuracy": round(
-                    sum(1 for r in ok if r.mode_correct) / len(ok), 3
-                ) if ok else 0.0,
-                "avg_keyword_coverage": round(
-                    sum(r.keyword_coverage for r in ok) / len(ok), 3
-                ) if ok else 0.0,
-                "avg_latency_ms": round(
-                    sum(r.latency_ms for r in ok) / len(ok), 1
-                ) if ok else 0.0,
+                "count": len(cat_r),
+                "topic_accuracy": (
+                    sum(1 for r in cat_r if r.topic_correct) / len(cat_r)
+                ),
+                "mode_accuracy": (
+                    sum(1 for r in cat_r if r.mode_correct) / len(cat_r)
+                ),
+                "avg_keyword_coverage": (
+                    sum(r.keyword_coverage for r in cat_kw) / len(cat_kw)
+                    if cat_kw else 0.0
+                ),
+                "avg_latency_ms": (
+                    sum(r.latency_ms for r in cat_lat) / len(cat_lat)
+                    if cat_lat else 0.0
+                ),
             }
 
         return {
-            "total_queries": total,
+            "total_queries": len(results),
             "successful_queries": len(successful),
-            "failed_queries": len(errored),
+            "failed_queries": len(failed),
             "topic_accuracy": round(topic_accuracy, 4),
             "mode_accuracy": round(mode_accuracy, 4),
             "avg_keyword_coverage": round(avg_keyword_coverage, 4),
@@ -483,7 +496,8 @@ def compute_token_summary(results: list[QueryResult]) -> dict:
     """
     Compute token-usage statistics from a list of QueryResult objects.
 
-    Only non-errored results are included in averages so that pipeline
+    All values are computed from real QueryResult data.  Only non-errored
+    results with at least one token recorded are included so that pipeline
     failures do not skew token/cost numbers.
 
     Args:
@@ -495,77 +509,85 @@ def compute_token_summary(results: list[QueryResult]) -> dict:
             avg_input_per_query, avg_output_per_query, avg_total_per_query,
             total_cost_usd, avg_cost_per_query,
             tokens_per_ms,
-            min_tokens_query, max_tokens_query,
-            by_mode  (dict[mode, avg_total_tokens]),
-            by_category (dict[category, avg_total_tokens]).
+            min_tokens_query (query_id str), max_tokens_query (query_id str),
+            by_mode  (dict[mode, {count, avg_input, avg_output,
+                                   avg_total, avg_cost}]),
+            by_category (dict[category, {count, avg_tokens, avg_cost}]).
     """
+    empty: dict = {
+        "total_input_tokens": 0,
+        "total_output_tokens": 0,
+        "total_tokens": 0,
+        "avg_input_per_query": 0.0,
+        "avg_output_per_query": 0.0,
+        "avg_total_per_query": 0.0,
+        "total_cost_usd": 0.0,
+        "avg_cost_per_query": 0.0,
+        "tokens_per_ms": 0.0,
+        "min_tokens_query": "N/A",
+        "max_tokens_query": "N/A",
+        "by_mode": {},
+        "by_category": {},
+    }
     if not results:
-        return {
-            "total_input_tokens": 0,
-            "total_output_tokens": 0,
-            "total_tokens": 0,
-            "avg_input_per_query": 0.0,
-            "avg_output_per_query": 0.0,
-            "avg_total_per_query": 0.0,
-            "total_cost_usd": 0.0,
-            "avg_cost_per_query": 0.0,
-            "tokens_per_ms": 0.0,
-            "min_tokens_query": 0,
-            "max_tokens_query": 0,
-            "by_mode": {},
-            "by_category": {},
+        return empty
+
+    token_r = [r for r in results if not r.error and r.total_tokens > 0]
+    if not token_r:
+        return empty
+
+    n = len(token_r)
+    total_input = sum(r.input_tokens for r in token_r)
+    total_output = sum(r.output_tokens for r in token_r)
+    total_all = sum(r.total_tokens for r in token_r)
+    total_cost = sum(r.estimated_cost_usd for r in token_r)
+
+    # tokens_per_ms: output tokens produced per millisecond of pipeline time
+    lat_r = [r for r in token_r if r.latency_ms > 0]
+    tokens_per_ms = (
+        sum(r.output_tokens for r in lat_r) / sum(r.latency_ms for r in lat_r)
+        if lat_r else 0.0
+    )
+
+    min_r = min(token_r, key=lambda r: r.total_tokens)
+    max_r = max(token_r, key=lambda r: r.total_tokens)
+
+    # Per-mode breakdown from real data
+    modes = set(r.actual_mode for r in token_r)
+    by_mode: dict[str, dict] = {}
+    for mode in modes:
+        m_r = [r for r in token_r if r.actual_mode == mode]
+        by_mode[mode] = {
+            "count": len(m_r),
+            "avg_input": sum(r.input_tokens for r in m_r) / len(m_r),
+            "avg_output": sum(r.output_tokens for r in m_r) / len(m_r),
+            "avg_total": sum(r.total_tokens for r in m_r) / len(m_r),
+            "avg_cost": sum(r.estimated_cost_usd for r in m_r) / len(m_r),
         }
 
-    ok = [r for r in results if not r.error]
-
-    total_input = sum(r.input_tokens for r in ok)
-    total_output = sum(r.output_tokens for r in ok)
-    total_all = sum(r.total_tokens for r in ok)
-    total_cost = sum(r.estimated_cost_usd for r in ok)
-    n = len(ok)
-
-    avg_input = total_input / n if n else 0.0
-    avg_output = total_output / n if n else 0.0
-    avg_total = total_all / n if n else 0.0
-    avg_cost = total_cost / n if n else 0.0
-
-    total_latency_ms = sum(r.latency_ms for r in ok)
-    # tokens_per_ms: average tokens produced per millisecond of pipeline time
-    tokens_per_ms = (avg_total / (total_latency_ms / n)) if (n > 0 and total_latency_ms > 0) else 0.0
-
-    min_tokens = min((r.total_tokens for r in ok), default=0)
-    max_tokens = max((r.total_tokens for r in ok), default=0)
-
-    # Per-mode breakdown
-    mode_groups: dict[str, list[int]] = {}
-    for r in ok:
-        mode_groups.setdefault(r.actual_mode, []).append(r.total_tokens)
-    by_mode = {
-        mode: round(sum(vals) / len(vals), 1)
-        for mode, vals in mode_groups.items()
-    }
-
-    # Per-category breakdown
-    cat_groups: dict[str, list[int]] = {}
-    for r in ok:
-        cat_groups.setdefault(r.category, []).append(r.total_tokens)
-    by_category = {
-        cat: round(sum(vals) / len(vals), 1)
-        for cat, vals in cat_groups.items()
-    }
+    # Per-category breakdown from real data
+    cats = set(r.category for r in token_r)
+    by_category: dict[str, dict] = {}
+    for cat in cats:
+        c_r = [r for r in token_r if r.category == cat]
+        by_category[cat] = {
+            "count": len(c_r),
+            "avg_tokens": sum(r.total_tokens for r in c_r) / len(c_r),
+            "avg_cost": sum(r.estimated_cost_usd for r in c_r) / len(c_r),
+        }
 
     return {
         "total_input_tokens": total_input,
         "total_output_tokens": total_output,
         "total_tokens": total_all,
-        "avg_input_per_query": round(avg_input, 1),
-        "avg_output_per_query": round(avg_output, 1),
-        "avg_total_per_query": round(avg_total, 1),
-        "total_cost_usd": round(total_cost, 6),
-        "avg_cost_per_query": round(avg_cost, 6),
-        "tokens_per_ms": round(tokens_per_ms, 4),
-        "min_tokens_query": min_tokens,
-        "max_tokens_query": max_tokens,
+        "avg_input_per_query": total_input / n,
+        "avg_output_per_query": total_output / n,
+        "avg_total_per_query": total_all / n,
+        "total_cost_usd": total_cost,
+        "avg_cost_per_query": total_cost / n,
+        "tokens_per_ms": tokens_per_ms,
+        "min_tokens_query": min_r.query_id,
+        "max_tokens_query": max_r.query_id,
         "by_mode": by_mode,
         "by_category": by_category,
     }
@@ -921,7 +943,8 @@ def run_model_comparison(
     output: str = RESULTS_FILE,
 ) -> None:
     """
-    Run all models with the given *retrieval_mode* and *embedding_name*.
+    Run all models in MODEL_REGISTRY with the given *retrieval_mode* and
+    *embedding_name*.
 
     Skips models that are not installed in Ollama.
     Prints a comparison table derived entirely from real experiment results.
@@ -931,20 +954,22 @@ def run_model_comparison(
         embedding_name: Embedding model key.
         output:         Path to the results file.
     """
+    all_model_names = [cfg["name"] for cfg in MODEL_REGISTRY]
     print(f"\n{'═' * 60}")
     print(f"  MODEL COMPARISON — Retrieval: {retrieval_mode} | Embedding: {embedding_name}")
-    print(f"  Models: {MODELS_TO_EVALUATE}")
+    print(f"  Models: {all_model_names}")
     print(f"{'═' * 60}")
 
     writer = ResultsWriter(filepath=output)
-    writer.write_run_header(models=MODELS_TO_EVALUATE, modes=[retrieval_mode])
+    writer.write_run_header(models=all_model_names, modes=[retrieval_mode])
 
     # STEP 1 — Run experiments and collect real results
     summaries: dict[str, dict] = {}
     token_summaries: dict[str, dict] = {}
     ran_models: list[str] = []
 
-    for model in MODELS_TO_EVALUATE:
+    for cfg in MODEL_REGISTRY:
+        model = cfg["name"]
         if not ResearchEvaluator._is_model_available(model):
             print(f"\n  [Skip] Model '{model}' not available in ollama list.")
             continue
@@ -1164,8 +1189,7 @@ def run_full_matrix(
     """
     Run every MODEL × EMBEDDING combination (the full research matrix).
 
-    Matrix = len(MODELS_TO_EVALUATE) × len(EMBEDDING_MODELS)
-    = 4 models × 7 embeddings = up to 28 combinations.
+    Matrix = len(MODEL_REGISTRY) × len(EMBEDDING_MODELS).
 
     Skips a model entirely if it is not installed in Ollama.
     Skips a specific (model, embedding) pair if it is already present in the
@@ -1178,10 +1202,11 @@ def run_full_matrix(
         output:         Path to the results file.
     """
     emb_names = [e["name"] for e in EMBEDDING_MODELS]
-    total = len(MODELS_TO_EVALUATE) * len(EMBEDDING_MODELS)
+    all_model_names = [cfg["name"] for cfg in MODEL_REGISTRY]
+    total = len(MODEL_REGISTRY) * len(EMBEDDING_MODELS)
 
     print(f"\n{'═' * 56} FULL MATRIX EVALUATION {'═' * 1}")
-    print(f"  Models     : {', '.join(MODELS_TO_EVALUATE)}")
+    print(f"  Models     : {', '.join(all_model_names)}")
     print(f"  Embeddings : {', '.join(emb_names)}")
     print(f"  Retrieval  : {retrieval_mode}")
     print(f"  Total runs : up to {total}")
@@ -1191,7 +1216,8 @@ def run_full_matrix(
     matrix_rows: list[dict] = []
     run_idx = 0
 
-    for model in MODELS_TO_EVALUATE:
+    for cfg in MODEL_REGISTRY:
+        model = cfg["name"]
         if not ResearchEvaluator._is_model_available(model):
             print(f"\n  [Skip] Model '{model}' not installed — skipping all embeddings.")
             continue
@@ -1267,7 +1293,10 @@ def run_full_matrix(
     best_overall = max(matrix_rows, key=lambda r: r["topic_acc"] + r["mode_acc"])
 
     # SLM models are those with type "SLM" in the registry
-    slm_model_names = [m for m in MODELS_TO_EVALUATE if (get_model_config(m) or {}).get("type") == "SLM"]
+    slm_model_names = [
+        cfg["name"] for cfg in MODEL_REGISTRY
+        if cfg.get("type") == "SLM"
+    ]
     slm_rows = [r for r in matrix_rows if r["model"] in slm_model_names]
     best_slm = (
         max(slm_rows, key=lambda r: r["topic_acc"] + r["mode_acc"])
@@ -1310,95 +1339,178 @@ def run_token_comparison(
     output: str = RESULTS_FILE,
 ) -> None:
     """
-    Compare token usage across all available models.
+    Compare token usage and accuracy across all models in MODEL_REGISTRY.
 
-    Runs every model in MODELS_TO_EVALUATE and prints a token-focused
-    comparison table.  All numbers are derived from real QueryResult data
-    via compute_token_summary().
+    All numbers are derived from real QueryResult data via
+    compute_token_summary() and compute_summary().  No hardcoded values
+    appear in any print() table or f-string result line.
 
     Args:
         retrieval_mode: Retrieval mode to use for all models.
         embedding_name: Embedding model key.
         output:         Path to the results file.
     """
+    all_model_names = [cfg["name"] for cfg in MODEL_REGISTRY]
     print(f"\n{'═' * 60}")
     print(f"  TOKEN COMPARISON — Retrieval: {retrieval_mode} | Embedding: {embedding_name}")
-    print(f"  Models: {MODELS_TO_EVALUATE}")
+    print(f"  Models: {all_model_names}")
     print(f"{'═' * 60}")
 
     writer = ResultsWriter(filepath=output)
-    writer.write_run_header(models=MODELS_TO_EVALUATE, modes=[retrieval_mode])
+    writer.write_run_header(models=all_model_names, modes=[retrieval_mode])
 
     # STEP 1 — Run experiments and collect real results
-    summaries: dict[str, dict] = {}
-    token_summaries: dict[str, dict] = {}
+    all_summaries: dict[str, dict] = {}
+    all_token_summaries: dict[str, dict] = {}
     ran_models: list[str] = []
 
-    for model in MODELS_TO_EVALUATE:
-        if not ResearchEvaluator._is_model_available(model):
-            print(f"\n  [Skip] Model '{model}' not available in ollama list.")
+    for cfg in MODEL_REGISTRY:
+        model = cfg["name"]
+        ev = ResearchEvaluator(model, retrieval_mode, embedding_name)
+        if not ev._is_model_available(model):
+            print(f"[Skip] {model}")
             continue
-        evaluator = ResearchEvaluator(
-            model=model,
-            retrieval_mode=retrieval_mode,
-            embedding_name=embedding_name,
-        )
-        results = evaluator.run_experiment()
-        summaries[model] = evaluator.compute_summary()
-        token_summaries[model] = compute_token_summary(results)
-        writer.write(
-            model=model,
-            retrieval_mode=retrieval_mode,
-            results=results,
-            summary=summaries[model],
-            embedding_name=embedding_name,
-        )
+        print(f"\nRunning: {model}")
+        results = ev.run_experiment()
+        all_summaries[model] = ev.compute_summary()
+        all_token_summaries[model] = compute_token_summary(results)
+        writer.write(model, retrieval_mode, results,
+                     all_summaries[model], embedding_name)
         ran_models.append(model)
 
     if not ran_models:
+        print("No models available.")
         return
 
-    # STEP 2 — Determine token-usage leaders using real data
-    most_efficient = min(ran_models, key=lambda m: token_summaries[m]["avg_total_per_query"])
-    lowest_cost = min(ran_models, key=lambda m: token_summaries[m]["avg_cost_per_query"])
-    highest_throughput = max(ran_models, key=lambda m: token_summaries[m]["tokens_per_ms"])
-
-    # STEP 3 — Print token comparison table derived entirely from real data
-    print(f"\n{'═' * 60} TOKEN ANALYSIS {'═' * 5}")
-    print(f"  Retrieval: {retrieval_mode} | Embedding: {embedding_name}")
-    print(f"  {'─' * 92}")
-    print(
-        f"  {'Model':<16} | {'AvgInput':>8} | {'AvgOutput':>9} | {'AvgTotal':>8} | "
-        f"{'TotalTok':>9} | {'Tok/ms':>7} | {'AvgCost':>12}"
+    # STEP 2 — Find winners from real data
+    best_acc = max(ran_models,
+                   key=lambda m: all_summaries[m]["topic_accuracy"])
+    fastest = min(ran_models,
+                  key=lambda m: all_summaries[m]["avg_latency_ms"])
+    above_80 = [m for m in ran_models
+                if all_summaries[m]["topic_accuracy"] >= 0.80]
+    cheapest_good = (
+        min(above_80,
+            key=lambda m: all_token_summaries[m]["avg_cost_per_query"])
+        if above_80 else None
     )
-    print(f"  {'─' * 92}")
+    slm_ran = [m for m in ran_models
+               if get_model_config(m) and
+               get_model_config(m)["type"] == "SLM"]
+    llm_ran = [m for m in ran_models
+               if get_model_config(m) and
+               get_model_config(m)["type"] == "LLM"]
+    best_slm = (
+        max(slm_ran, key=lambda m: all_summaries[m]["topic_accuracy"])
+        if slm_ran else None
+    )
+    best_llm = (
+        max(llm_ran, key=lambda m: all_summaries[m]["topic_accuracy"])
+        if llm_ran else None
+    )
+
+    # STEP 3 — Print table — all values from real data
+    sep = "═" * 88
+    div = "─" * 88
+    print(f"\n{sep}")
+    print(
+        f"TOKEN & COST COMPARISON | {retrieval_mode} | "
+        f"{embedding_name} | {len(TEST_QUERIES)} queries"
+    )
+    print(div)
+    print(
+        f"{'Model':<16}|{'Type':<5}|{'TopicAcc':>9}|"
+        f"{'AvgIn':>6}|{'AvgOut':>7}|"
+        f"{'Total':>6}|{'Cost/Q':>11}|{'Latency':>9}"
+    )
+    print(div)
     for model in ran_models:
-        t = token_summaries[model]
+        s = all_summaries[model]
+        t = all_token_summaries[model]
+        c = get_model_config(model) or {}
         print(
-            f"  {model:<16} | {t['avg_input_per_query']:>8.0f} | "
-            f"{t['avg_output_per_query']:>9.0f} | "
-            f"{t['avg_total_per_query']:>8.0f} | "
-            f"{t['total_tokens']:>9} | "
-            f"{t['tokens_per_ms']:>7.4f} | "
-            f"${t['avg_cost_per_query']:>11.6f}"
+            f"{model:<16}|"
+            f"{c.get('type', '?'):<5}|"
+            f"{s['topic_accuracy']*100:>8.1f}%|"
+            f"{t['avg_input_per_query']:>6.0f}|"
+            f"{t['avg_output_per_query']:>7.0f}|"
+            f"{t['avg_total_per_query']:>6.0f}|"
+            f"${t['avg_cost_per_query']:>10.6f}|"
+            f"{s['avg_latency_ms']:>7.0f}ms"
         )
-    print(f"  {'═' * 92}")
+    print(sep)
 
-    # STEP 4 — Print token leaders derived from real data
+    # STEP 4 — Print winners from real data
     print(
-        f"  Most efficient    : {most_efficient} "
-        f"({token_summaries[most_efficient]['avg_total_per_query']:.0f} avg tokens/query)"
+        f"Best Accuracy  : {best_acc} "
+        f"({all_summaries[best_acc]['topic_accuracy']*100:.1f}%)"
     )
     print(
-        f"  Lowest cost       : {lowest_cost} "
-        f"(${token_summaries[lowest_cost]['avg_cost_per_query']:.6f}/query)"
+        f"Fastest        : {fastest} "
+        f"({all_summaries[fastest]['avg_latency_ms']:.0f}ms)"
     )
-    print(
-        f"  Highest throughput: {highest_throughput} "
-        f"({token_summaries[highest_throughput]['tokens_per_ms']:.4f} tok/ms)"
-    )
-    print(f"  All results saved to: {output}")
-    print(f"{'═' * 80}")
+    if cheapest_good:
+        print(
+            f"Cheapest >=80% : {cheapest_good} "
+            f"(${all_token_summaries[cheapest_good]['avg_cost_per_query']:.6f}/q)"
+        )
+    if best_slm and best_llm:
+        gap = (
+            (all_summaries[best_llm]["topic_accuracy"] -
+             all_summaries[best_slm]["topic_accuracy"]) * 100
+        )
+        slm_pct = (
+            all_summaries[best_slm]["topic_accuracy"] /
+            all_summaries[best_llm]["topic_accuracy"] * 100
+        )
+        print(
+            f"Best SLM       : {best_slm} "
+            f"({all_summaries[best_slm]['topic_accuracy']*100:.1f}%)"
+        )
+        print(
+            f"Best LLM       : {best_llm} "
+            f"({all_summaries[best_llm]['topic_accuracy']*100:.1f}%)"
+        )
+        print(
+            f"SLM vs LLM gap : {gap:.1f}% "
+            f"(SLM = {slm_pct:.1f}% of LLM accuracy)"
+        )
+    print(sep)
+
+    # Token by mode — all from real data
+    all_modes: set[str] = set()
+    for t in all_token_summaries.values():
+        all_modes.update(t["by_mode"].keys())
+    if all_modes:
+        print("\nTOKENS BY PIPELINE MODE (avg across all models)")
+        print(div)
+        print(
+            f"{'Mode':<16}|{'AvgInput':>9}|"
+            f"{'AvgOutput':>10}|{'AvgTotal':>9}|{'AvgCost':>11}"
+        )
+        print(div)
+        for mode in sorted(all_modes):
+            ins: list[float] = []
+            outs: list[float] = []
+            tots: list[float] = []
+            costs: list[float] = []
+            for t in all_token_summaries.values():
+                if mode in t["by_mode"]:
+                    m = t["by_mode"][mode]
+                    ins.append(m["avg_input"])
+                    outs.append(m["avg_output"])
+                    tots.append(m["avg_total"])
+                    costs.append(m["avg_cost"])
+            if ins:
+                print(
+                    f"{mode:<16}|"
+                    f"{sum(ins)/len(ins):>9.1f}|"
+                    f"{sum(outs)/len(outs):>10.1f}|"
+                    f"{sum(tots)/len(tots):>9.1f}|"
+                    f"${sum(costs)/len(costs):>10.6f}"
+                )
+
+    print(f"\nResults saved to: {output}")
 
 
 def run_slm_vs_llm_comparison(
@@ -1411,117 +1523,180 @@ def run_slm_vs_llm_comparison(
 
     Model type (SLM / LLM) is determined by MODEL_REGISTRY.  All metric
     values in the output are derived from QueryResult objects returned by
-    run_experiment().
+    run_experiment().  No hardcoded numbers appear in any table line.
 
     Args:
         retrieval_mode: Retrieval mode to use for all models.
         embedding_name: Embedding model key.
         output:         Path to the results file.
     """
+    all_model_names = [cfg["name"] for cfg in MODEL_REGISTRY]
     print(f"\n{'═' * 60}")
     print(f"  SLM vs LLM COMPARISON — Retrieval: {retrieval_mode} | Embedding: {embedding_name}")
-    print(f"  Models: {MODELS_TO_EVALUATE}")
+    print(f"  Models: {all_model_names}")
     print(f"{'═' * 60}")
 
     writer = ResultsWriter(filepath=output)
-    writer.write_run_header(models=MODELS_TO_EVALUATE, modes=[retrieval_mode])
+    writer.write_run_header(models=all_model_names, modes=[retrieval_mode])
 
     # STEP 1 — Run experiments and collect real results
-    summaries: dict[str, dict] = {}
-    token_summaries: dict[str, dict] = {}
-    ran_models: list[str] = []
+    slm_all: list[QueryResult] = []
+    llm_all: list[QueryResult] = []
+    slm_s: dict[str, dict] = {}
+    llm_s: dict[str, dict] = {}
 
-    for model in MODELS_TO_EVALUATE:
-        if not ResearchEvaluator._is_model_available(model):
+    for cfg in MODEL_REGISTRY:
+        model = cfg["name"]
+        ev = ResearchEvaluator(model, retrieval_mode, embedding_name)
+        if not ev._is_model_available(model):
             print(f"\n  [Skip] Model '{model}' not available in ollama list.")
             continue
-        evaluator = ResearchEvaluator(
-            model=model,
-            retrieval_mode=retrieval_mode,
-            embedding_name=embedding_name,
-        )
-        results = evaluator.run_experiment()
-        summaries[model] = evaluator.compute_summary()
-        token_summaries[model] = compute_token_summary(results)
-        writer.write(
-            model=model,
-            retrieval_mode=retrieval_mode,
-            results=results,
-            summary=summaries[model],
-            embedding_name=embedding_name,
-        )
-        ran_models.append(model)
+        print(f"\nRunning: {model} ({cfg['type']})")
+        results = ev.run_experiment()
+        summary = ev.compute_summary()
+        tok = compute_token_summary(results)
+        writer.write(model, retrieval_mode, results, summary, embedding_name)
+        data = {"summary": summary, "tokens": tok, "config": cfg}
+        if cfg["type"] == "SLM":
+            slm_all.extend(results)
+            slm_s[model] = data
+        else:
+            llm_all.extend(results)
+            llm_s[model] = data
 
-    if not ran_models:
+    if not slm_s and not llm_s:
+        print("No models available.")
         return
 
-    # Separate into SLM and LLM groups based on MODEL_REGISTRY type
-    slm_models = [m for m in ran_models if (get_model_config(m) or {}).get("type") == "SLM"]
-    llm_models = [m for m in ran_models if (get_model_config(m) or {}).get("type") == "LLM"]
-    other_models = [m for m in ran_models if m not in slm_models and m not in llm_models]
+    def best_in(
+        sdict: dict[str, dict],
+        keys: list[str],
+        highest: bool = True,
+    ) -> tuple[str | None, float | None]:
+        """Find best model in group by nested key path."""
+        best_name: str | None = None
+        best_val: float | None = None
+        for name, d in sdict.items():
+            val: object = d
+            for k in keys:
+                val = val.get(k) if isinstance(val, dict) else None  # type: ignore[union-attr]
+                if val is None:
+                    break
+            if not isinstance(val, (int, float)):
+                continue
+            if (best_val is None
+                    or (highest and val > best_val)
+                    or (not highest and val < best_val)):
+                best_name, best_val = name, float(val)
+        return best_name, best_val
 
-    # STEP 2 — Determine winners within each group using real data
-    best_slm = (
-        max(slm_models, key=lambda m: summaries[m]["topic_accuracy"])
-        if slm_models else None
-    )
-    best_llm = (
-        max(llm_models, key=lambda m: summaries[m]["topic_accuracy"])
-        if llm_models else None
-    )
+    metrics = [
+        (
+            "Topic Accuracy",
+            ["summary", "topic_accuracy"],
+            True,
+            lambda v: f"{v*100:.1f}%",
+        ),
+        (
+            "Mode Accuracy",
+            ["summary", "mode_accuracy"],
+            True,
+            lambda v: f"{v*100:.1f}%",
+        ),
+        (
+            "Avg Keyword Cov",
+            ["summary", "avg_keyword_coverage"],
+            True,
+            lambda v: f"{v:.3f}",
+        ),
+        (
+            "Avg Latency",
+            ["summary", "avg_latency_ms"],
+            False,
+            lambda v: f"{v:.0f}ms",
+        ),
+        (
+            "Avg Total Tokens",
+            ["tokens", "avg_total_per_query"],
+            False,
+            lambda v: f"{v:.0f}",
+        ),
+        (
+            "Avg Cost/Query",
+            ["tokens", "avg_cost_per_query"],
+            False,
+            lambda v: f"${v:.6f}",
+        ),
+        (
+            "Faithfulness",
+            ["summary", "avg_metrics", "Faithfulness"],
+            True,
+            lambda v: f"{v:.3f}",
+        ),
+        (
+            "Answer Relevance",
+            ["summary", "avg_metrics", "Answer Relevance"],
+            True,
+            lambda v: f"{v:.3f}",
+        ),
+    ]
 
-    def _print_group(label: str, group: list[str]) -> None:
-        if not group:
-            return
-        print(f"\n  ── {label} ──")
-        print(f"  {'─' * 84}")
-        print(
-            f"  {'Model':<16} | {'TopicAcc':>8} | {'ModeAcc':>7} | "
-            f"{'KwCov':>6} | {'Lat':>8} | {'AvgTok':>7} | {'AvgCost':>12}"
-        )
-        print(f"  {'─' * 84}")
-        for model in group:
-            s = summaries[model]
-            t = token_summaries[model]
+    sep = "═" * 68
+    div = "─" * 68
+
+    # STEP 3 — Print comparison table derived entirely from real data
+    print(f"\n{sep}")
+    print("SLM vs LLM — all values from real results")
+    print(div)
+    print(f"{'Metric':<22} | {'Best SLM':>20} | {'Best LLM':>20}")
+    print(div)
+    for label, keys, highest, fmt in metrics:
+        sn, sv = best_in(slm_s, keys, highest)
+        ln, lv = best_in(llm_s, keys, highest)
+        ss = f"{sn} ({fmt(sv)})" if sn and sv is not None else "N/A"
+        ls = f"{ln} ({fmt(lv)})" if ln and lv is not None else "N/A"
+        print(f"{label:<22} | {ss:>20} | {ls:>20}")
+    print(div)
+
+    # STEP 4 — Print accuracy gap derived from real data
+    if slm_s and llm_s:
+        _, ba_slm = best_in(slm_s, ["summary", "topic_accuracy"], True)
+        _, ba_llm = best_in(llm_s, ["summary", "topic_accuracy"], True)
+        if ba_slm is not None and ba_llm is not None and ba_llm > 0:
+            gap = (ba_llm - ba_slm) * 100
+            pct = (ba_slm / ba_llm) * 100
             print(
-                f"  {model:<16} | "
-                f"{s['topic_accuracy']*100:>7.1f}% | "
-                f"{s['mode_accuracy']*100:>6.1f}% | "
-                f"{s['avg_keyword_coverage']:>6.3f} | "
-                f"{s['avg_latency_ms']:>6.0f}ms | "
-                f"{t['avg_total_per_query']:>7.0f} | "
-                f"${t['avg_cost_per_query']:>11.6f}"
+                f"Accuracy gap : {gap:.1f}% "
+                f"(SLM = {pct:.1f}% of LLM accuracy)"
             )
-        print(f"  {'─' * 84}")
 
-    # STEP 3 — Print grouped comparison table derived entirely from real data
-    print(f"\n{'═' * 60} SLM vs LLM COMPARISON {'═' * 1}")
-    _print_group("Small Language Models (SLM)", slm_models)
-    _print_group("Large Language Models (LLM)", llm_models)
-    if other_models:
-        _print_group("Other", other_models)
-    print(f"  {'═' * 84}")
-
-    # STEP 4 — Print group winners derived from real data
-    if best_slm:
+    # Per category from real results
+    if slm_all and llm_all:
+        cats = sorted(set(r.category for r in slm_all + llm_all))
+        print(f"\nPER CATEGORY | SLM vs LLM Topic Accuracy")
+        print(div)
         print(
-            f"  Best SLM: {best_slm} "
-            f"({summaries[best_slm]['topic_accuracy']*100:.1f}% topic acc, "
-            f"{summaries[best_slm]['avg_latency_ms']:.0f}ms)"
+            f"{'Category':<20}|{'SLM Acc':>9}|"
+            f"{'LLM Acc':>9}|{'Gap':>7}"
         )
-    if best_llm:
-        print(
-            f"  Best LLM: {best_llm} "
-            f"({summaries[best_llm]['topic_accuracy']*100:.1f}% topic acc, "
-            f"{summaries[best_llm]['avg_latency_ms']:.0f}ms)"
-        )
-    if best_slm and best_llm:
-        winner = best_slm if (
-            summaries[best_slm]["topic_accuracy"] >= summaries[best_llm]["topic_accuracy"]
-        ) else best_llm
-        print(f"  Overall winner: {winner} ({(get_model_config(winner) or {}).get('type','?')})")
-    print(f"  All results saved to: {output}")
-    print(f"{'═' * 80}")
+        print(div)
+        for cat in cats:
+            sc = [r for r in slm_all if r.category == cat]
+            lc = [r for r in llm_all if r.category == cat]
+            sa = (
+                sum(1 for r in sc if r.topic_correct) / len(sc) * 100
+                if sc else 0.0
+            )
+            la = (
+                sum(1 for r in lc if r.topic_correct) / len(lc) * 100
+                if lc else 0.0
+            )
+            print(
+                f"{cat:<20}|{sa:>8.1f}%|"
+                f"{la:>8.1f}%|{la-sa:>+6.1f}%"
+            )
+    print(sep)
+    print(f"Results saved to: {output}")
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────
@@ -1534,7 +1709,8 @@ _EXPERIMENT_MODES = [
 
 
 def _parse_args() -> argparse.Namespace:
-    # Embedding support: list all embedding names for --embedding choices
+    # Build choice lists from MODEL_REGISTRY and EMBEDDING_MODELS
+    model_names = [cfg["name"] for cfg in MODEL_REGISTRY]
     emb_names = [e["name"] for e in EMBEDDING_MODELS]
 
     parser = argparse.ArgumentParser(
@@ -1552,7 +1728,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        choices=MODELS_TO_EVALUATE,
+        choices=model_names,
         default="phi3",
         help="Model to evaluate (default: phi3).",
     )
