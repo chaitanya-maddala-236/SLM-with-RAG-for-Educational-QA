@@ -1577,11 +1577,17 @@ def run_slm_vs_llm_comparison(
         best_name: str | None = None
         best_val: float | None = None
         for name, d in sdict.items():
-            val: object = d
+            current: dict | None = d
+            val: object = None
             for k in keys:
-                val = val.get(k) if isinstance(val, dict) else None  # type: ignore[union-attr]
-                if val is None:
+                if not isinstance(current, dict):
+                    current = None
                     break
+                val = current.get(k)
+                if isinstance(val, dict):
+                    current = val
+                else:
+                    current = None
             if not isinstance(val, (int, float)):
                 continue
             if (best_val is None
