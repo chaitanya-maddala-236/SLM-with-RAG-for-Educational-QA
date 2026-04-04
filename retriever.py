@@ -258,8 +258,9 @@ def mmr_rerank(
             if mmr_score > best_score:
                 best_score = mmr_score
                 best_idx = i
-        selected.append(candidates[best_idx])
-        remaining.remove(best_idx)
+        if best_idx is not None:
+            selected.append(candidates[best_idx])
+            remaining.remove(best_idx)
 
     return selected
 

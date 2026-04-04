@@ -163,7 +163,7 @@ class TopicMemoryManager:
         """Return True if new_subject differs from the currently active subject."""
         current = self.get_active_subject()
         if current is None:
-            return False
+            return bool(new_subject)
         return current.lower() != new_subject.lower()
 
     def get_topic_confidence(self, topic: str) -> float:
