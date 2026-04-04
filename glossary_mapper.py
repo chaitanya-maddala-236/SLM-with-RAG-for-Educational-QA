@@ -364,6 +364,8 @@ GLOSSARY.update({
 
 
 # RAG Improvement 1: Topic-based query expansion
+MAX_EXPANSION_TERMS = 3  # number of expansion terms appended to the query
+
 TOPIC_EXPANSIONS = {
     "water cycle": ["hydrological cycle", "evaporation", "condensation", "precipitation", "transpiration"],
     "carbon cycle": ["co2 cycle", "greenhouse gas", "fossil fuels", "carbon sink", "decomposition"],
@@ -401,7 +403,7 @@ def expand_query_with_topic(query: str, topic: str) -> str:
     expansions = TOPIC_EXPANSIONS.get(topic.lower(), [])
     if not expansions:
         return query
-    expansion_str = " ".join(expansions[:3])  # use first 3 expansion terms
+    expansion_str = " ".join(expansions[:MAX_EXPANSION_TERMS])
     return f"{query} {expansion_str}"
 
 
