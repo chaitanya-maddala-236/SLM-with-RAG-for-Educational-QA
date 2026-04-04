@@ -12,6 +12,8 @@ Run with:
     streamlit run app.py
 """
 
+import json
+import datetime
 import streamlit as st
 from langchain_community.vectorstores import Chroma
 
@@ -29,7 +31,8 @@ from topic_memory_manager import TopicMemoryManager
 from retriever import build_vector_store
 from rag_pipeline import RAGPipeline
 # Embedding support: import embedding config for the sidebar selector
-from research_config import EMBEDDING_MODELS, DEFAULT_EMBEDDING
+from research_config import EMBEDDING_MODELS, DEFAULT_EMBEDDING, MODEL_REGISTRY
+from data_loader import get_corpus_stats, get_topic_coverage_warnings
 
 # ── Cached resources (load once, reuse across reruns) ────────────────────────
 
@@ -81,6 +84,12 @@ def init_session_state() -> None:
         st.session_state.selected_retrieval = "hybrid"
     if "selected_topk" not in st.session_state:
         st.session_state.selected_topk = 5
+    if "session_export_data" not in st.session_state:
+        st.session_state.session_export_data = []
+    if "last_grounding_score" not in st.session_state:
+        st.session_state.last_grounding_score = None
+    if "last_cost" not in st.session_state:
+        st.session_state.last_cost = None
 
 
 # ── Sidebar: Controls only ────────────────────────────────────────────────────
@@ -95,14 +104,30 @@ def render_controls() -> tuple[str, str, str, int]:
             st.session_state.last_step_log = []
             st.session_state.last_metrics = {}
             st.session_state.last_result_meta = {}
+            st.session_state.session_export_data = []
             st.rerun()
+
+        # Bonus Feature 5: Session Export
+        if st.session_state.get("session_export_data"):
+            export_json = json.dumps({
+                "exported_at": datetime.datetime.now().isoformat(),
+                "turns": st.session_state.session_export_data,
+            }, indent=2, default=str)
+            st.download_button(
+                "📥 Export Session (JSON)",
+                data=export_json,
+                file_name=f"session_{datetime.datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
+                mime="application/json",
+                use_container_width=True,
+            )
 
         st.divider()
         st.subheader("🤖 Model Settings")
+        slm_models = [name for name, cfg in MODEL_REGISTRY.items() if cfg["type"] == "slm"]
         selected_model = st.selectbox(
             "SLM Model",
-            ["phi3", "tinyllama", "llama3.2", "mistral"],
-            index=0,
+            slm_models,
+            index=0 if "phi3" not in slm_models else slm_models.index("phi3"),
             help="Must be installed via: ollama pull <model>",
         )
 
@@ -159,6 +184,24 @@ def render_controls() -> tuple[str, str, str, int]:
                 """
             )
 
+        st.divider()
+        # RAG Improvement: Corpus coverage checker - Bonus Feature 4
+        with st.expander("📊 Corpus Coverage", expanded=False):
+            try:
+                stats = get_corpus_stats()
+                st.metric("Total Documents", stats["total_documents"])
+                st.metric("Topics", stats["unique_topics"])
+                st.metric("Subjects", stats["unique_subjects"])
+                warnings = get_topic_coverage_warnings()
+                if warnings:
+                    st.warning(f"⚠️ {len(warnings)} topics have <5 documents")
+                    with st.expander("Show sparse topics"):
+                        for topic in warnings[:10]:
+                            count = stats["topic_distribution"].get(topic, 0)
+                            st.text(f"• {topic}: {count} docs")
+            except Exception as e:
+                st.info("Corpus stats unavailable")
+
         return selected_model, selected_retrieval, selected_topk, selected_embedding
 
 
@@ -203,6 +246,36 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
                 else ""
             )
             st.markdown(f"{mode_color} **Mode:** {mode}{score_str}{ctx_sim_str}")
+
+            # RAG Improvement 28: Grounding score display
+            grounding_score = result_meta.get("grounding_score")
+            if grounding_score is not None:
+                if grounding_score >= 0.6:
+                    grounding_color = "🟢"
+                    grounding_label = "High"
+                elif grounding_score >= 0.3:
+                    grounding_color = "🟡"
+                    grounding_label = "Medium"
+                else:
+                    grounding_color = "🔴"
+                    grounding_label = "Low"
+                st.markdown(f"{grounding_color} **Grounding:** {grounding_label} ({grounding_score:.2f})")
+
+            # RAG Improvement 29: Cost display
+            cost = result_meta.get("estimated_cost_usd")
+            token_counts = result_meta.get("token_counts") or {}
+            if cost is not None:
+                cost_str = f"${cost:.6f}" if cost > 0 else "Free (local)"
+                total_tok = token_counts.get("total_tokens", "—")
+                st.caption(f"💰 Cost: {cost_str} | Tokens: {total_tok}")
+
+            # Bonus Feature 3: Topic Confidence UI
+            topic_confidence = result_meta.get("topic_confidence_list")
+            if topic_confidence:
+                with st.expander("🎯 Topic Confidence", expanded=False):
+                    for t_name, t_conf in topic_confidence[:3]:
+                        bar_val = min(1.0, max(0.0, t_conf))
+                        st.progress(bar_val, text=f"{t_name}: {t_conf:.2f}")
 
         if token_counts:
             tc1, tc2, tc3 = st.columns(3)
@@ -336,7 +409,24 @@ def render_chat_column(pipeline: RAGPipeline, embedding_name: str = DEFAULT_EMBE
         "retrieval_score": result.retrieval_score,
         "token_counts": result.token_counts,
         "context_similarity": result.context_similarity,
+        "grounding_score": getattr(result, 'grounding_score', None),
+        "estimated_cost_usd": getattr(result, 'estimated_cost_usd', None),
+        "topic_confidence_list": getattr(result, 'topic_confidence_list', None),
     }
+    st.session_state.last_grounding_score = getattr(result, 'grounding_score', None)
+    st.session_state.last_cost = getattr(result, 'estimated_cost_usd', None)
+    # Build session export data for Bonus Feature 5
+    st.session_state.session_export_data.append({
+        "turn": len(st.session_state.chat_history),
+        "query": user_input,
+        "answer": result.answer,
+        "mode": result.mode,
+        "topic": result.detected_topic,
+        "subject": result.detected_subject,
+        "grounding_score": getattr(result, 'grounding_score', None),
+        "estimated_cost_usd": getattr(result, 'estimated_cost_usd', None),
+        "latency_ms": result.latency_ms,
+    })
 
     # Build assistant message
     if result.clarification_needed and result.clarification_message:

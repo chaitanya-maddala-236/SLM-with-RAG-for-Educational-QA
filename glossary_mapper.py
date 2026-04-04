@@ -361,3 +361,164 @@ GLOSSARY.update({
     "two-factor authentication": "cybersecurity",
     "network security": "cybersecurity",
 })
+
+
+# RAG Improvement 1: Topic-based query expansion
+MAX_EXPANSION_TERMS = 3  # number of expansion terms appended to the query
+
+TOPIC_EXPANSIONS = {
+    "water cycle": ["hydrological cycle", "evaporation", "condensation", "precipitation", "transpiration"],
+    "carbon cycle": ["co2 cycle", "greenhouse gas", "fossil fuels", "carbon sink", "decomposition"],
+    "photosynthesis": ["chlorophyll", "glucose production", "light reactions", "calvin cycle", "chloroplast"],
+    "bicycle": ["cycling mechanics", "gear system", "braking", "pedalling", "chain drive"],
+    "nitrogen cycle": ["nitrification", "denitrification", "nitrogen fixation", "ammonification"],
+    "trigonometry": ["sine cosine tangent", "right triangle ratios", "unit circle", "pythagorean theorem"],
+    "genetics": ["dna heredity", "allele genotype phenotype", "mendelian inheritance", "chromosome"],
+    "machine learning": ["neural networks", "supervised learning", "gradient descent", "training data"],
+    "electricity": ["voltage current resistance", "ohm's law", "circuit design", "conductor insulator"],
+    "magnetism": ["magnetic field", "electromagnet", "flux", "pole attraction repulsion"],
+    "nervous system": ["neuron synapse", "axon dendrite", "reflex arc", "brain function"],
+    "evolution": ["natural selection", "adaptation", "speciation", "genetic drift", "darwin"],
+    "cell structure": ["nucleus organelle", "membrane cytoplasm", "mitochondria ribosome", "eukaryote prokaryote"],
+    "cellular respiration": ["atp synthesis", "glycolysis", "krebs cycle", "electron transport chain"],
+    "digestion": ["stomach enzymes", "small intestine", "peristalsis", "nutrient absorption"],
+    "immune system": ["antibody antigen", "lymphocyte", "vaccination", "innate adaptive immunity"],
+    "sound waves": ["frequency amplitude", "wavelength decibel", "echo resonance", "longitudinal wave"],
+    "cybersecurity": ["encryption firewall", "malware phishing", "data breach", "network security"],
+}
+
+def expand_query_with_topic(query: str, topic: str) -> str:
+    """
+    Expand a query by appending topic-related terms to improve retrieval recall.
+
+    # RAG Improvement 1: Topic-based query expansion
+
+    Args:
+        query: The original user query string.
+        topic: The detected or resolved topic name.
+
+    Returns:
+        Enriched query string with topic expansion terms appended.
+    """
+    expansions = TOPIC_EXPANSIONS.get(topic.lower(), [])
+    if not expansions:
+        return query
+    expansion_str = " ".join(expansions[:MAX_EXPANSION_TERMS])
+    return f"{query} {expansion_str}"
+
+
+# RAG Improvement 2: Grade-aware retrieval
+GRADE_SIGNALS: dict[str, list[str]] = {
+    "elementary": ["simple", "basic", "easy", "grade 5", "grade 6", "young", "kid", "child", "primary"],
+    "middle": ["intermediate", "grade 7", "grade 8", "middle school"],
+    "high": ["advanced", "grade 9", "grade 10", "grade 11", "grade 12", "high school", "detailed", "complex"],
+    "university": ["university", "college", "undergraduate", "research", "academic", "scholarly"],
+}
+
+def detect_grade_filter(query: str) -> str | None:
+    """
+    Detect an appropriate grade band from the query text using GRADE_SIGNALS.
+
+    # RAG Improvement 2: Grade-aware retrieval
+
+    Args:
+        query: The user query string.
+
+    Returns:
+        Grade band string ("elementary", "middle", "high", "university"),
+        or None if no grade signal is detected.
+    """
+    query_lower = query.lower()
+    for grade_band, signals in GRADE_SIGNALS.items():
+        for signal in signals:
+            if signal in query_lower:
+                return grade_band
+    return None
+
+
+# RAG Improvement 3: Subject-aware chunking
+SUBJECT_CHUNK_SIZES: dict[str, int] = {
+    "biology": 500,
+    "chemistry": 450,
+    "physics": 450,
+    "mathematics": 350,
+    "geography": 400,
+    "environmental science": 500,
+    "computer science": 400,
+    "transportation": 350,
+    "default": 400,
+}
+
+def get_chunk_size(subject: str) -> int:
+    """
+    Return the recommended chunk size (in characters) for a given subject.
+
+    # RAG Improvement 3: Subject-aware chunking
+    Longer subjects like biology/environmental science benefit from larger chunks
+    that preserve multi-sentence explanations; math benefits from smaller, precise chunks.
+
+    Args:
+        subject: Subject name (e.g. "biology", "mathematics").
+
+    Returns:
+        Integer character count for chunk size.
+    """
+    return SUBJECT_CHUNK_SIZES.get(subject.lower(), SUBJECT_CHUNK_SIZES["default"])
+
+
+# RAG Improvement 4: Subject-specific RAG thresholds
+SUBJECT_RAG_THRESHOLDS: dict[str, float] = {
+    "biology": 0.55,
+    "chemistry": 0.55,
+    "physics": 0.58,
+    "mathematics": 0.62,
+    "geography": 0.50,
+    "environmental science": 0.52,
+    "computer science": 0.58,
+    "transportation": 0.50,
+    "default": 0.60,
+}
+
+def get_rag_threshold(subject: str) -> float:
+    """
+    Return the RAG similarity threshold for a given subject.
+
+    # RAG Improvement 4: Subject-specific thresholds
+    Some subjects like geography have broader language variety and benefit from
+    a lower threshold; precise subjects like mathematics use a higher bar.
+
+    Args:
+        subject: Subject name (e.g. "mathematics").
+
+    Returns:
+        Float threshold in [0, 1].
+    """
+    return SUBJECT_RAG_THRESHOLDS.get(subject.lower(), SUBJECT_RAG_THRESHOLDS["default"])
+
+
+# RAG Improvement 5: Context budget per model
+CONTEXT_BUDGETS: dict[str, int] = {
+    "tinyllama": 800,
+    "phi3": 2000,
+    "llama3.2": 2000,
+    "mistral": 3000,
+    "gpt-3.5-turbo": 3000,
+    "gpt-4o-mini": 4000,
+    "default": 1500,
+}
+
+def get_context_budget(model_name: str) -> int:
+    """
+    Return the context budget (approximate token limit for retrieved context) for a model.
+
+    # RAG Improvement 5: Context budget per model
+    Smaller models like TinyLLaMA have limited context windows; larger models
+    can use more retrieved context for better grounding.
+
+    Args:
+        model_name: Model identifier (e.g. "phi3", "tinyllama").
+
+    Returns:
+        Integer token budget for context assembly.
+    """
+    return CONTEXT_BUDGETS.get(model_name.lower(), CONTEXT_BUDGETS["default"])

@@ -68,6 +68,9 @@ from glossary_mapper import (
     expand_query,
     AMBIGUOUS_TERMS,
     OUT_OF_SCOPE_SIGNALS,
+    get_rag_threshold,    # RAG Improvement 16
+    get_context_budget,   # RAG Improvement 15
+    expand_query_with_topic,  # RAG Improvement 10
 )
 from retriever import (
     build_bm25_index,
@@ -142,6 +145,26 @@ List at least 2-3 possible interpretations clearly and concisely for students.
 Answer:""",
 )
 
+# RAG Improvement 17: Conversation-aware prompting
+RAG_PROMPT_WITH_HISTORY = PromptTemplate(
+    input_variables=["context", "question", "history"],
+    template="""You are a helpful educational assistant for students.
+Use ONLY the context below to answer the question.
+Consider the recent conversation history for context.
+If the context does not contain enough information, say so clearly.
+Keep your answer concise and suitable for the student's level.
+
+Recent conversation:
+{history}
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:""",
+)
+
 TOP_K = 5          # number of documents to return after reranking
 RETRIEVAL_CANDIDATES = 20   # wider pool fetched before reranking
 # Similarity threshold: scores at or above this use RAG mode; below → LLM Fallback
@@ -150,6 +173,8 @@ RAG_SIMILARITY_THRESHOLD: float = 0.6
 # use PARTIAL_CONTEXT_PROMPT with retrieved docs as partial context instead of
 # discarding them entirely.
 PARTIAL_RAG_THRESHOLD: float = 0.3
+# RAG Improvement 14: minimum grounding score before a warning is emitted
+MIN_GROUNDING_THRESHOLD: float = 0.3
 # Context drift threshold: cosine similarity between the current query and the
 # last conversation context below this value indicates an out-of-context query.
 CONTEXT_SIMILARITY_THRESHOLD: float = 0.30
@@ -266,6 +291,64 @@ def _extract_query_topic(query: str) -> str | None:
     return " ".join(meaningful[:3])
 
 
+# RAG Improvement 14: Grounding score
+def _compute_grounding_score(answer: str, docs: list[Document]) -> float:
+    """
+    Compute sentence-level grounding score: fraction of answer sentences
+    that share at least one content token with retrieved documents.
+
+    A score below MIN_GROUNDING_THRESHOLD (0.3) indicates the answer may not be well-grounded in the retrieved docs.
+
+    Args:
+        answer: The generated answer string.
+        docs: Retrieved documents used for context.
+
+    Returns:
+        Float in [0, 1] indicating the proportion of grounded answer sentences.
+    """
+    if not docs or not answer.strip():
+        return 0.0
+    doc_tokens: set[str] = set()
+    for doc in docs:
+        tokens = re.findall(r"\b[a-z0-9]+\b", doc.page_content.lower())
+        doc_tokens.update(t for t in tokens if len(t) > 2)
+    sentences = [s.strip() for s in re.split(r"[.!?]+", answer) if s.strip()]
+    if not sentences:
+        return 0.0
+    grounded = 0
+    for sentence in sentences:
+        s_tokens = set(re.findall(r"\b[a-z0-9]+\b", sentence.lower()))
+        if s_tokens & doc_tokens:
+            grounded += 1
+    return grounded / len(sentences)
+
+
+# RAG Improvement 15: Context budget manager
+def _build_context_with_budget(docs: list[Document], model_name: str) -> str:
+    """
+    Build context string from retrieved docs respecting the model's token budget.
+
+    Uses get_context_budget() to avoid exceeding context limits for small models.
+
+    Args:
+        docs: Retrieved documents.
+        model_name: The model being used (determines budget).
+
+    Returns:
+        Concatenated context string within token budget.
+    """
+    budget = get_context_budget(model_name)
+    parts: list[str] = []
+    used = 0
+    for doc in docs:
+        doc_tokens = _count_tokens(doc.page_content)
+        if used + doc_tokens > budget:
+            break
+        parts.append(doc.page_content)
+        used += doc_tokens
+    return "\n\n".join(parts) if parts else (docs[0].page_content if docs else "")
+
+
 @dataclass
 class PipelineResult:
     """Container for all outputs produced by one pipeline run."""
@@ -286,6 +369,8 @@ class PipelineResult:
     token_counts: dict[str, int] = field(default_factory=dict)
     context_similarity: float | None = None
     latency_ms: float = 0.0
+    grounding_score: float = 0.0       # RAG Improvement 14
+    estimated_cost_usd: float = 0.0    # RAG Improvement 18
 
     def log(self, step: int, message: str) -> None:
         entry = f"[Step {step:>2}] {message}"
@@ -815,19 +900,15 @@ class RAGPipeline:
 
         # ── Step 9: SLM generation ────────────────────────────────────────────
         if result.mode == "RAG":
-            context = "\n\n".join(
-                f"[Doc {i+1}] {doc.page_content}"
-                for i, doc in enumerate(result.retrieved_docs)
-            )
+            # RAG Improvement 15: use context budget manager
+            context = _build_context_with_budget(result.retrieved_docs, self.model_name)
             prompt_text = RAG_PROMPT.format(context=context, question=user_query)
             result.log(9, "Mode RAG: sending context + question to Phi-3 via Ollama …")
         elif result.mode == "Partial RAG":
             # Bugfix (Bug 1): use retrieved docs even when score is below the
             # full RAG threshold instead of discarding them entirely.
-            context = "\n\n".join(
-                f"[Doc {i+1}] {doc.page_content}"
-                for i, doc in enumerate(result.retrieved_docs)
-            )
+            # RAG Improvement 15: use context budget manager
+            context = _build_context_with_budget(result.retrieved_docs, self.model_name)
             prompt_text = PARTIAL_CONTEXT_PROMPT.format(context=context, question=user_query)
             result.log(
                 9,
@@ -858,6 +939,12 @@ class RAGPipeline:
 
         result.answer = answer.strip()
         result.log(10, f"Answer generated ({len(result.answer)} chars).")
+
+        # RAG Improvement 14: Compute grounding score
+        grounding_score = _compute_grounding_score(result.answer, result.retrieved_docs)
+        result.grounding_score = grounding_score
+        if grounding_score < MIN_GROUNDING_THRESHOLD and result.mode == "RAG":
+            print(f"  [Grounding] ⚠ Low grounding score: {grounding_score:.3f}")
 
         # ── Token counting ────────────────────────────────────────────────────
         input_tokens = _count_tokens(prompt_text)
@@ -925,7 +1012,7 @@ class RAGPipeline:
                 answer_snippet=result.answer[:120],
             )
             if topic_manager is not None:
-                topic_manager.update(fallback_topic)
+                topic_manager.update(fallback_topic, subject=final_subject or "", grade="")
             result.detected_topic = fallback_topic
         else:
             memory.add_turn(
@@ -934,7 +1021,7 @@ class RAGPipeline:
                 answer_snippet=result.answer[:120],
             )
             if topic_manager is not None:
-                topic_manager.update(final_topic)
+                topic_manager.update(final_topic, subject=final_subject or "", grade="")
 
         result.latency_ms = (_time.time() - _run_start) * 1000
         return result

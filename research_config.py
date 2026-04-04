@@ -9,12 +9,62 @@ Usage:
         MODELS_TO_EVALUATE, RETRIEVAL_MODES, RESULTS_FILE, TEST_QUERIES,
         EMBEDDING_MODELS, DEFAULT_EMBEDDING,
         CHROMA_DIR_TEMPLATE, COLLECTION_NAME_TEMPLATE,
+        MODEL_REGISTRY, get_model_config, get_embedding_config,
     )
 """
 
+# ── Model registry ───────────────────────────────────────────────────────────
+# Maps model identifiers to metadata used for evaluation and cost tracking.
+# type="slm"  → free / locally-hosted (Ollama) models
+# type="llm"  → paid API-hosted models
+
+MODEL_REGISTRY: dict[str, dict] = {
+    # ── SLMs (free / local) ──────────────────────────────────────────────────
+    "tinyllama": {
+        "type": "slm",
+        "input_cost_per_1k": 0.0,
+        "output_cost_per_1k": 0.0,
+        "description": "TinyLlama 1.1B — very fast, minimal RAM, ideal for edge testing",
+    },
+    "phi3": {
+        "type": "slm",
+        "input_cost_per_1k": 0.0,
+        "output_cost_per_1k": 0.0,
+        "description": "Microsoft Phi-3 Mini — strong reasoning for its size",
+    },
+    "llama3.2": {
+        "type": "slm",
+        "input_cost_per_1k": 0.0,
+        "output_cost_per_1k": 0.0,
+        "description": "Meta Llama 3.2 — compact multilingual model",
+    },
+    "mistral": {
+        "type": "slm",
+        "input_cost_per_1k": 0.0,
+        "output_cost_per_1k": 0.0,
+        "description": "Mistral 7B — balanced quality/speed for local inference",
+    },
+    # ── LLMs (paid API) ──────────────────────────────────────────────────────
+    "gpt-3.5-turbo": {
+        "type": "llm",
+        "input_cost_per_1k": 0.0005,
+        "output_cost_per_1k": 0.0015,
+        "description": "OpenAI GPT-3.5 Turbo — fast, cost-effective API model",
+    },
+    "gpt-4o-mini": {
+        "type": "llm",
+        "input_cost_per_1k": 0.00015,
+        "output_cost_per_1k": 0.0006,
+        "description": "OpenAI GPT-4o Mini — strong capability at low cost",
+    },
+}
+
 # ── Experiment axes ──────────────────────────────────────────────────────────
 
-MODELS_TO_EVALUATE = ["tinyllama", "phi3", "llama3.2", "mistral"]
+# Dynamically select all SLM entries from MODEL_REGISTRY
+MODELS_TO_EVALUATE: list[str] = [
+    name for name, cfg in MODEL_REGISTRY.items() if cfg["type"] == "slm"
+]
 RETRIEVAL_MODES = ["vector_only", "bm25_only", "hybrid"]
 RESULTS_FILE = "research_results.txt"
 
@@ -401,3 +451,49 @@ TEST_QUERIES = [
         "expected_mode": "RAG",
     },
 ]
+
+
+# ── Helper functions ─────────────────────────────────────────────────────────
+
+def get_model_config(model_name: str) -> dict:
+    """
+    Return the MODEL_REGISTRY entry for *model_name*.
+
+    Args:
+        model_name: Key used in MODEL_REGISTRY (e.g. "phi3", "gpt-4o-mini").
+
+    Returns:
+        Dict with keys: type, input_cost_per_1k, output_cost_per_1k, description.
+
+    Raises:
+        KeyError: If *model_name* is not registered.
+    """
+    if model_name not in MODEL_REGISTRY:
+        raise KeyError(
+            f"Model '{model_name}' not found in MODEL_REGISTRY. "
+            f"Available models: {list(MODEL_REGISTRY)}"
+        )
+    return MODEL_REGISTRY[model_name]
+
+
+def get_embedding_config(embedding_name: str) -> dict:
+    """
+    Return the EMBEDDING_MODELS entry matching *embedding_name*.
+
+    Args:
+        embedding_name: The ``name`` field of the desired embedding entry
+                        (e.g. "bge-small", "minilm").
+
+    Returns:
+        Dict with keys: name, model_id, description, dimension.
+
+    Raises:
+        KeyError: If *embedding_name* is not found in EMBEDDING_MODELS.
+    """
+    for entry in EMBEDDING_MODELS:
+        if entry["name"] == embedding_name:
+            return entry
+    raise KeyError(
+        f"Embedding '{embedding_name}' not found in EMBEDDING_MODELS. "
+        f"Available embeddings: {[e['name'] for e in EMBEDDING_MODELS]}"
+    )

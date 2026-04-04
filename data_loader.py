@@ -8,6 +8,12 @@ Topics covered: water cycle, carbon cycle, bicycle, photosynthesis.
 
 from extended_corpus_v2 import EXTENDED_DOCUMENTS_V2
 from extended_corpus_v3 import EXTENDED_DOCUMENTS_V3
+from extended_corpus_v4 import GEOGRAPHY_EXTENDED_V3
+from extended_corpus_v5 import EXTENDED_DOCUMENTS_V5
+from extended_corpus_v6 import EXTENDED_DOCUMENTS_V6
+from extended_corpus_v7 import EXTENDED_DOCUMENTS_V7
+from extended_corpus_v8 import EXTENDED_DOCUMENTS_V8
+from extended_corpus_v9 import EXTENDED_DOCUMENTS_V9
 
 EDUCATIONAL_DOCUMENTS = [
     # ── WATER CYCLE ──────────────────────────────────────────────────────────
@@ -190,6 +196,12 @@ EDUCATIONAL_DOCUMENTS = [
 
 EDUCATIONAL_DOCUMENTS += EXTENDED_DOCUMENTS_V2
 EDUCATIONAL_DOCUMENTS += EXTENDED_DOCUMENTS_V3
+EDUCATIONAL_DOCUMENTS += GEOGRAPHY_EXTENDED_V3
+EDUCATIONAL_DOCUMENTS += EXTENDED_DOCUMENTS_V5
+EDUCATIONAL_DOCUMENTS += EXTENDED_DOCUMENTS_V6
+EDUCATIONAL_DOCUMENTS += EXTENDED_DOCUMENTS_V7
+EDUCATIONAL_DOCUMENTS += EXTENDED_DOCUMENTS_V8
+EDUCATIONAL_DOCUMENTS += EXTENDED_DOCUMENTS_V9
 
 
 def get_documents() -> list[dict]:
@@ -254,3 +266,47 @@ def get_chunked_texts_and_metadatas(
             })
 
     return chunked_texts, chunked_metadatas
+
+
+def get_corpus_stats() -> dict:
+    """Compute and return statistics about EDUCATIONAL_DOCUMENTS.
+
+    Returns a dict with:
+        total_documents     : int
+        unique_topics       : int
+        unique_subjects     : int
+        topics_under_5      : dict[str, int]  topics with fewer than 5 docs
+        topics_over_10      : dict[str, int]  topics with more than 10 docs
+        subject_distribution: dict[str, int]
+        grade_distribution  : dict[str, int]
+        average_text_length : float  (characters)
+        topic_distribution  : dict[str, int]
+    """
+    from collections import Counter
+
+    topic_counts: dict[str, int] = Counter(doc["topic"] for doc in EDUCATIONAL_DOCUMENTS)
+    subject_counts: dict[str, int] = Counter(doc["subject"] for doc in EDUCATIONAL_DOCUMENTS)
+    grade_counts: dict[str, int] = Counter(doc["grade"] for doc in EDUCATIONAL_DOCUMENTS)
+    avg_len = (
+        sum(len(doc["text"]) for doc in EDUCATIONAL_DOCUMENTS) / len(EDUCATIONAL_DOCUMENTS)
+        if EDUCATIONAL_DOCUMENTS
+        else 0.0
+    )
+
+    return {
+        "total_documents": len(EDUCATIONAL_DOCUMENTS),
+        "unique_topics": len(topic_counts),
+        "unique_subjects": len(subject_counts),
+        "topics_under_5": {t: c for t, c in topic_counts.items() if c < 5},
+        "topics_over_10": {t: c for t, c in topic_counts.items() if c > 10},
+        "subject_distribution": dict(subject_counts),
+        "grade_distribution": dict(grade_counts),
+        "average_text_length": avg_len,
+        "topic_distribution": dict(topic_counts),
+    }
+
+
+def get_topic_coverage_warnings() -> list[str]:
+    """Return topic names that have fewer than 5 documents in the corpus."""
+    stats = get_corpus_stats()
+    return list(stats["topics_under_5"].keys())
