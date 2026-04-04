@@ -64,13 +64,15 @@ from topic_memory_manager import TopicMemoryManager
 
 MODEL_REGISTRY: dict[str, dict] = {
     # Local SLMs run via Ollama — zero API cost
-    "tinyllama":    {"type": "SLM", "input_cost_per_1k": 0.0,     "output_cost_per_1k": 0.0},
-    "phi3":         {"type": "SLM", "input_cost_per_1k": 0.0,     "output_cost_per_1k": 0.0},
-    "llama3.2":     {"type": "LLM", "input_cost_per_1k": 0.0,     "output_cost_per_1k": 0.0},
-    "mistral":      {"type": "LLM", "input_cost_per_1k": 0.0,     "output_cost_per_1k": 0.0},
-    # Cloud LLM reference rates (for hypothetical cost comparison)
-    "gpt-4o":       {"type": "LLM", "input_cost_per_1k": 0.005,   "output_cost_per_1k": 0.015},
-    "gpt-3.5-turbo":{"type": "LLM", "input_cost_per_1k": 0.0005,  "output_cost_per_1k": 0.0015},
+    "tinyllama":    {"type": "SLM", "input_cost_per_1k": 0.0,      "output_cost_per_1k": 0.0},
+    "phi3":         {"type": "SLM", "input_cost_per_1k": 0.0,      "output_cost_per_1k": 0.0},
+    "gemma2":       {"type": "SLM", "input_cost_per_1k": 0.0,      "output_cost_per_1k": 0.0},
+    "llama3.2":     {"type": "SLM", "input_cost_per_1k": 0.0,      "output_cost_per_1k": 0.0},
+    "mistral":      {"type": "SLM", "input_cost_per_1k": 0.0,      "output_cost_per_1k": 0.0},
+    # Cloud LLMs — API cost rates in USD per 1 000 tokens
+    "gpt-4o-mini":  {"type": "LLM", "input_cost_per_1k": 0.00015,  "output_cost_per_1k": 0.0006},
+    "claude-haiku": {"type": "LLM", "input_cost_per_1k": 0.00025,  "output_cost_per_1k": 0.00125},
+    "gemini-flash": {"type": "LLM", "input_cost_per_1k": 0.000075, "output_cost_per_1k": 0.0003},
 }
 
 MIN_ACCURACY: float = 0.0  # Threshold constant — not a table value

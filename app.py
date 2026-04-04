@@ -123,7 +123,7 @@ def render_controls() -> tuple[str, str, str, int]:
 
         st.divider()
         st.subheader("🤖 Model Settings")
-        slm_models = [name for name, cfg in MODEL_REGISTRY.items() if cfg["type"] == "slm"]
+        slm_models = [m["name"] for m in MODEL_REGISTRY if m["type"] == "SLM"]
         selected_model = st.selectbox(
             "SLM Model",
             slm_models,

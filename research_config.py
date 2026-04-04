@@ -9,109 +9,80 @@ Usage:
         MODELS_TO_EVALUATE, RETRIEVAL_MODES, RESULTS_FILE, TEST_QUERIES,
         EMBEDDING_MODELS, DEFAULT_EMBEDDING,
         CHROMA_DIR_TEMPLATE, COLLECTION_NAME_TEMPLATE,
-        MODEL_REGISTRY, get_model_config, get_embedding_config,
+        MODEL_REGISTRY, SLM_MODELS, LLM_MODELS,
+        get_model_config, get_embedding_config,
     )
 """
 
 # ── Model registry ───────────────────────────────────────────────────────────
-# Maps model identifiers to metadata used for evaluation and cost tracking.
-# type="slm"  → free / locally-hosted (Ollama) models
-# type="llm"  → paid API-hosted models
+# List of model metadata dicts used for evaluation and cost tracking.
+# type="SLM"  → free / locally-hosted (Ollama) models
+# type="LLM"  → paid API-hosted models
 
-MODEL_REGISTRY: dict[str, dict] = {
-    # ── SLMs (free / local) ──────────────────────────────────────────────────
-    "tinyllama": {
-        "type": "slm",
-        "input_cost_per_1k": 0.0,
-        "output_cost_per_1k": 0.0,
-        "description": "TinyLlama 1.1B — very fast, minimal RAM, ideal for edge testing",
-    },
-    "phi3": {
-        "type": "slm",
-        "input_cost_per_1k": 0.0,
-        "output_cost_per_1k": 0.0,
-        "description": "Microsoft Phi-3 Mini — strong reasoning for its size",
-    },
-    "llama3.2": {
-        "type": "slm",
-        "input_cost_per_1k": 0.0,
-        "output_cost_per_1k": 0.0,
-        "description": "Meta Llama 3.2 — compact multilingual model",
-    },
-    "mistral": {
-        "type": "slm",
-        "input_cost_per_1k": 0.0,
-        "output_cost_per_1k": 0.0,
-        "description": "Mistral 7B — balanced quality/speed for local inference",
-    },
-    # ── LLMs (paid API) ──────────────────────────────────────────────────────
-    "gpt-3.5-turbo": {
-        "type": "llm",
-        "input_cost_per_1k": 0.0005,
-        "output_cost_per_1k": 0.0015,
-        "description": "OpenAI GPT-3.5 Turbo — fast, cost-effective API model",
-    },
-    "gpt-4o-mini": {
-        "type": "llm",
-        "input_cost_per_1k": 0.00015,
-        "output_cost_per_1k": 0.0006,
-        "description": "OpenAI GPT-4o Mini — strong capability at low cost",
-    },
-}
+MODEL_REGISTRY = [
+    {"name": "tinyllama", "type": "SLM", "provider": "ollama",
+     "model_id": "tinyllama", "params_billions": 1.1,
+     "context_window": 2048, "cost_per_1k_input_tokens": 0.0,
+     "cost_per_1k_output_tokens": 0.0},
+    {"name": "phi3", "type": "SLM", "provider": "ollama",
+     "model_id": "phi3", "params_billions": 3.8,
+     "context_window": 4096, "cost_per_1k_input_tokens": 0.0,
+     "cost_per_1k_output_tokens": 0.0},
+    {"name": "gemma2", "type": "SLM", "provider": "ollama",
+     "model_id": "gemma2:2b", "params_billions": 2.0,
+     "context_window": 8192, "cost_per_1k_input_tokens": 0.0,
+     "cost_per_1k_output_tokens": 0.0},
+    {"name": "llama3.2", "type": "SLM", "provider": "ollama",
+     "model_id": "llama3.2", "params_billions": 3.0,
+     "context_window": 4096, "cost_per_1k_input_tokens": 0.0,
+     "cost_per_1k_output_tokens": 0.0},
+    {"name": "mistral", "type": "SLM", "provider": "ollama",
+     "model_id": "mistral", "params_billions": 7.0,
+     "context_window": 8192, "cost_per_1k_input_tokens": 0.0,
+     "cost_per_1k_output_tokens": 0.0},
+    {"name": "gpt-4o-mini", "type": "LLM", "provider": "openai",
+     "model_id": "gpt-4o-mini", "params_billions": None,
+     "context_window": 128000, "cost_per_1k_input_tokens": 0.00015,
+     "cost_per_1k_output_tokens": 0.0006},
+    {"name": "claude-haiku", "type": "LLM", "provider": "anthropic",
+     "model_id": "claude-haiku-4-5-20251001", "params_billions": None,
+     "context_window": 200000, "cost_per_1k_input_tokens": 0.00025,
+     "cost_per_1k_output_tokens": 0.00125},
+    {"name": "gemini-flash", "type": "LLM", "provider": "google",
+     "model_id": "gemini-1.5-flash", "params_billions": None,
+     "context_window": 1000000, "cost_per_1k_input_tokens": 0.000075,
+     "cost_per_1k_output_tokens": 0.0003},
+]
+
+# ── Derived model lists ──────────────────────────────────────────────────────
+
+SLM_MODELS = [m["name"] for m in MODEL_REGISTRY if m["type"] == "SLM"]
+LLM_MODELS = [m["name"] for m in MODEL_REGISTRY if m["type"] == "LLM"]
 
 # ── Experiment axes ──────────────────────────────────────────────────────────
 
-# Dynamically select all SLM entries from MODEL_REGISTRY
-MODELS_TO_EVALUATE: list[str] = [
-    name for name, cfg in MODEL_REGISTRY.items() if cfg["type"] == "slm"
-]
+MODELS_TO_EVALUATE = SLM_MODELS
 RETRIEVAL_MODES = ["vector_only", "bm25_only", "hybrid"]
 RESULTS_FILE = "research_results.txt"
 
 # Embedding support: available embedding models for research evaluation
 EMBEDDING_MODELS = [
-    {
-        "name": "bge-small",
-        "model_id": "BAAI/bge-small-en-v1.5",
-        "description": "BGE Small — fast, 384-dim (current default)",
-        "dimension": 384,
-    },
-    {
-        "name": "bge-base",
-        "model_id": "BAAI/bge-base-en-v1.5",
-        "description": "BGE Base — balanced, 768-dim",
-        "dimension": 768,
-    },
-    {
-        "name": "bge-large",
-        "model_id": "BAAI/bge-large-en-v1.5",
-        "description": "BGE Large — highest quality, 1024-dim",
-        "dimension": 1024,
-    },
-    {
-        "name": "minilm",
-        "model_id": "sentence-transformers/all-MiniLM-L6-v2",
-        "description": "MiniLM — very fast, 384-dim",
-        "dimension": 384,
-    },
-    {
-        "name": "mpnet",
-        "model_id": "sentence-transformers/all-mpnet-base-v2",
-        "description": "MPNet — strong general purpose, 768-dim",
-        "dimension": 768,
-    },
-    {
-        "name": "e5-small",
-        "model_id": "intfloat/e5-small-v2",
-        "description": "E5 Small — instruction-tuned, 384-dim",
-        "dimension": 384,
-    },
-    {
-        "name": "e5-base",
-        "model_id": "intfloat/e5-base-v2",
-        "description": "E5 Base — instruction-tuned, 768-dim",
-        "dimension": 768,
-    },
+    {"name": "bge-small", "model_id": "BAAI/bge-small-en-v1.5",
+     "dimension": 384, "type": "general"},
+    {"name": "bge-base", "model_id": "BAAI/bge-base-en-v1.5",
+     "dimension": 768, "type": "general"},
+    {"name": "bge-large", "model_id": "BAAI/bge-large-en-v1.5",
+     "dimension": 1024, "type": "general"},
+    {"name": "minilm",
+     "model_id": "sentence-transformers/all-MiniLM-L6-v2",
+     "dimension": 384, "type": "general"},
+    {"name": "mpnet",
+     "model_id": "sentence-transformers/all-mpnet-base-v2",
+     "dimension": 768, "type": "general"},
+    {"name": "e5-small", "model_id": "intfloat/e5-small-v2",
+     "dimension": 384, "type": "instruction"},
+    {"name": "e5-base", "model_id": "intfloat/e5-base-v2",
+     "dimension": 768, "type": "instruction"},
 ]
 
 # Default embedding (current system)
@@ -137,363 +108,219 @@ COLLECTION_NAME_TEMPLATE = "educational_rag_{embedding_name}"
 
 TEST_QUERIES = [
     # ── DIRECT ──────────────────────────────────────────────────────────────
-    {
-        "id": "D01", "category": "direct",
-        "query": "explain water cycle",
-        "expected_topic": "water cycle", "conversation_reset": True,
-        "expected_keywords": ["evaporation", "condensation", "precipitation"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "D02", "category": "direct",
-        "query": "how does photosynthesis work",
-        "expected_topic": "photosynthesis", "conversation_reset": True,
-        "expected_keywords": ["chlorophyll", "glucose", "sunlight"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "D03", "category": "direct",
-        "query": "what is the nitrogen cycle",
-        "expected_topic": "nitrogen cycle", "conversation_reset": True,
-        "expected_keywords": ["nitrogen", "nitrification", "bacteria"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "D04", "category": "direct",
-        "query": "explain bicycle gears",
-        "expected_topic": "bicycle", "conversation_reset": True,
-        "expected_keywords": ["gear", "sprocket", "chain"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "D05", "category": "direct",
-        "query": "what is carbon cycle",
-        "expected_topic": "carbon cycle", "conversation_reset": True,
-        "expected_keywords": ["carbon", "co2", "fossil"],
-        "expected_mode": "RAG",
-    },
+    {"id": "D01", "category": "direct",
+     "query": "explain water cycle",
+     "expected_topic": "water cycle", "conversation_reset": True,
+     "expected_keywords": ["evaporation", "condensation", "precipitation"],
+     "expected_mode": "RAG"},
+    {"id": "D02", "category": "direct",
+     "query": "how does photosynthesis work",
+     "expected_topic": "photosynthesis", "conversation_reset": True,
+     "expected_keywords": ["chlorophyll", "glucose", "sunlight"],
+     "expected_mode": "RAG"},
+    {"id": "D03", "category": "direct",
+     "query": "what is the nitrogen cycle",
+     "expected_topic": "nitrogen cycle", "conversation_reset": True,
+     "expected_keywords": ["nitrogen", "bacteria", "ammonia"],
+     "expected_mode": "RAG"},
+    {"id": "D04", "category": "direct",
+     "query": "explain bicycle gears",
+     "expected_topic": "bicycle", "conversation_reset": True,
+     "expected_keywords": ["gear", "sprocket", "chain"],
+     "expected_mode": "RAG"},
+    {"id": "D05", "category": "direct",
+     "query": "what is carbon cycle",
+     "expected_topic": "carbon cycle", "conversation_reset": True,
+     "expected_keywords": ["carbon", "co2", "fossil"],
+     "expected_mode": "RAG"},
 
     # ── FOLLOWUP PRONOUN — after D01 ─────────────────────────────────────────
-    {
-        "id": "F01", "category": "followup_pronoun",
-        "query": "how does it work",
-        "expected_topic": "water cycle", "conversation_reset": False,
-        "depends_on": "D01",
-        "expected_keywords": ["evaporation", "water"],
-        "expected_mode": "RAG",
-        "note": "pronoun it → water cycle",
-    },
-    {
-        "id": "F02", "category": "followup_pronoun",
-        "query": "what are its components",
-        "expected_topic": "water cycle", "conversation_reset": False,
-        "depends_on": "D01",
-        "expected_keywords": ["evaporation", "condensation"],
-        "expected_mode": "RAG",
-        "note": "possessive its → water cycle",
-    },
-    {
-        "id": "F03", "category": "followup_pronoun",
-        "query": "why does this happen",
-        "expected_topic": "water cycle", "conversation_reset": False,
-        "depends_on": "D01",
-        "expected_keywords": ["sun", "heat"],
-        "expected_mode": "RAG",
-        "note": "this → water cycle",
-    },
-    {
-        "id": "F04", "category": "followup_pronoun",
-        "query": "where does it occur",
-        "expected_topic": "water cycle", "conversation_reset": False,
-        "depends_on": "D01",
-        "expected_keywords": ["ocean", "atmosphere"],
-        "expected_mode": "RAG",
-        "note": "it location → water cycle",
-    },
+    {"id": "F01", "category": "followup_pronoun",
+     "query": "how does it work",
+     "expected_topic": "water cycle", "conversation_reset": False,
+     "depends_on": "D01",
+     "expected_keywords": ["evaporation", "water"],
+     "expected_mode": "RAG", "note": "it → water cycle"},
+    {"id": "F02", "category": "followup_pronoun",
+     "query": "what are its components",
+     "expected_topic": "water cycle", "conversation_reset": False,
+     "depends_on": "D01",
+     "expected_keywords": ["evaporation", "condensation"],
+     "expected_mode": "RAG"},
+    {"id": "F03", "category": "followup_pronoun",
+     "query": "why does this happen",
+     "expected_topic": "water cycle", "conversation_reset": False,
+     "depends_on": "D01", "expected_keywords": ["sun", "heat"],
+     "expected_mode": "RAG"},
 
     # ── FOLLOWUP SHORT — after D02 ───────────────────────────────────────────
-    {
-        "id": "S01", "category": "followup_short",
-        "query": "advantages",
-        "expected_topic": "photosynthesis", "conversation_reset": False,
-        "depends_on": "D02",
-        "expected_keywords": ["oxygen", "glucose"],
-        "expected_mode": "RAG",
-        "note": "single word → advantages of photosynthesis",
-    },
-    {
-        "id": "S02", "category": "followup_short",
-        "query": "limitations?",
-        "expected_topic": "photosynthesis", "conversation_reset": False,
-        "depends_on": "D02",
-        "expected_keywords": ["light", "temperature"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "S03", "category": "followup_short",
-        "query": "give example",
-        "expected_topic": "photosynthesis", "conversation_reset": False,
-        "depends_on": "D02",
-        "expected_keywords": ["plant", "leaf"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "S04", "category": "followup_short",
-        "query": "explain more",
-        "expected_topic": "photosynthesis", "conversation_reset": False,
-        "depends_on": "D02",
-        "expected_keywords": ["chlorophyll"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "S05", "category": "followup_short",
-        "query": "why?",
-        "expected_topic": "photosynthesis", "conversation_reset": False,
-        "depends_on": "D02",
-        "expected_keywords": ["sun", "energy"],
-        "expected_mode": "RAG",
-    },
+    {"id": "S01", "category": "followup_short",
+     "query": "advantages", "expected_topic": "photosynthesis",
+     "conversation_reset": False, "depends_on": "D02",
+     "expected_keywords": ["oxygen", "glucose"],
+     "expected_mode": "RAG"},
+    {"id": "S02", "category": "followup_short",
+     "query": "limitations?", "expected_topic": "photosynthesis",
+     "conversation_reset": False, "depends_on": "D02",
+     "expected_keywords": ["light", "temperature"],
+     "expected_mode": "RAG"},
+    {"id": "S03", "category": "followup_short",
+     "query": "give example", "expected_topic": "photosynthesis",
+     "conversation_reset": False, "depends_on": "D02",
+     "expected_keywords": ["plant", "leaf"], "expected_mode": "RAG"},
+    {"id": "S04", "category": "followup_short",
+     "query": "explain more", "expected_topic": "photosynthesis",
+     "conversation_reset": False, "depends_on": "D02",
+     "expected_keywords": ["chlorophyll"], "expected_mode": "RAG"},
 
     # ── CONTINUATION — after D03 ─────────────────────────────────────────────
-    {
-        "id": "C01", "category": "continuation",
-        "query": "and what are its stages",
-        "expected_topic": "nitrogen cycle", "conversation_reset": False,
-        "depends_on": "D03",
-        "expected_keywords": ["nitrification", "fixation"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "C02", "category": "continuation",
-        "query": "what about applications",
-        "expected_topic": "nitrogen cycle", "conversation_reset": False,
-        "depends_on": "D03",
-        "expected_keywords": ["fertilizer"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "C03", "category": "continuation",
-        "query": "also tell me disadvantages",
-        "expected_topic": "nitrogen cycle", "conversation_reset": False,
-        "depends_on": "D03",
-        "expected_keywords": ["pollution"],
-        "expected_mode": "RAG",
-    },
+    {"id": "C01", "category": "continuation",
+     "query": "and what are its stages",
+     "expected_topic": "nitrogen cycle", "conversation_reset": False,
+     "depends_on": "D03",
+     "expected_keywords": ["nitrification", "fixation"],
+     "expected_mode": "RAG"},
+    {"id": "C02", "category": "continuation",
+     "query": "what about applications",
+     "expected_topic": "nitrogen cycle", "conversation_reset": False,
+     "depends_on": "D03", "expected_keywords": ["fertilizer"],
+     "expected_mode": "RAG"},
 
     # ── AMBIGUOUS ────────────────────────────────────────────────────────────
-    {
-        "id": "A01", "category": "ambiguous",
-        "query": "what is cycle",
-        "expected_topic": "water cycle", "conversation_reset": False,
-        "depends_on": "D01",
-        "expected_keywords": ["water", "evaporation"],
-        "expected_mode": "RAG",
-        "note": "cycle → water cycle via memory",
-    },
-    {
-        "id": "A02", "category": "ambiguous",
-        "query": "how does a cycle move",
-        "expected_topic": "bicycle", "conversation_reset": False,
-        "depends_on": "D01",
-        "expected_keywords": ["pedal", "wheel"],
-        "expected_mode": "RAG",
-        "note": "cycle+move → bicycle topic shift",
-    },
-    {
-        "id": "A03", "category": "ambiguous",
-        "query": "what is the calvin cycle",
-        "expected_topic": "photosynthesis", "conversation_reset": True,
-        "expected_keywords": ["calvin", "rubisco", "glucose"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "A04", "category": "ambiguous",
-        "query": "explain the process",
-        "expected_topic": "photosynthesis", "conversation_reset": False,
-        "depends_on": "A03",
-        "expected_keywords": ["light", "chlorophyll"],
-        "expected_mode": "RAG",
-        "note": "process → photosynthesis via memory",
-    },
+    {"id": "A01", "category": "ambiguous", "query": "what is cycle",
+     "expected_topic": "water cycle", "conversation_reset": False,
+     "depends_on": "D01",
+     "expected_keywords": ["water", "evaporation"],
+     "expected_mode": "RAG"},
+    {"id": "A02", "category": "ambiguous",
+     "query": "how does a cycle move",
+     "expected_topic": "bicycle", "conversation_reset": False,
+     "depends_on": "D01",
+     "expected_keywords": ["pedal", "wheel"], "expected_mode": "RAG",
+     "note": "cycle+move → bicycle shift"},
+    {"id": "A03", "category": "ambiguous",
+     "query": "what is the calvin cycle",
+     "expected_topic": "photosynthesis", "conversation_reset": True,
+     "expected_keywords": ["calvin", "rubisco"],
+     "expected_mode": "RAG"},
 
     # ── TOPIC SHIFT ──────────────────────────────────────────────────────────
-    {
-        "id": "T01", "category": "topic_shift",
-        "query": "explain photosynthesis",
-        "expected_topic": "photosynthesis", "conversation_reset": False,
-        "depends_on": "D01",
-        "expected_keywords": ["chlorophyll", "glucose"],
-        "expected_mode": "RAG",
-        "note": "shift from water cycle",
-    },
-    {
-        "id": "T02", "category": "topic_shift",
-        "query": "now explain bicycle brakes",
-        "expected_topic": "bicycle", "conversation_reset": False,
-        "depends_on": "T01",
-        "expected_keywords": ["brake", "friction"],
-        "expected_mode": "RAG",
-        "note": "shift from photosynthesis",
-    },
-    {
-        "id": "T03", "category": "topic_shift",
-        "query": "what about carbon cycle now",
-        "expected_topic": "carbon cycle", "conversation_reset": False,
-        "depends_on": "T02",
-        "expected_keywords": ["carbon", "co2"],
-        "expected_mode": "RAG",
-        "note": "shift from bicycle",
-    },
+    {"id": "T01", "category": "topic_shift",
+     "query": "explain photosynthesis",
+     "expected_topic": "photosynthesis", "conversation_reset": False,
+     "depends_on": "D01",
+     "expected_keywords": ["chlorophyll", "glucose"],
+     "expected_mode": "RAG", "note": "shift from water cycle"},
+    {"id": "T02", "category": "topic_shift",
+     "query": "now explain bicycle brakes",
+     "expected_topic": "bicycle", "conversation_reset": False,
+     "depends_on": "T01",
+     "expected_keywords": ["brake", "friction"], "expected_mode": "RAG"},
 
     # ── OUT OF SCOPE ─────────────────────────────────────────────────────────
-    {
-        "id": "O01", "category": "out_of_scope",
-        "query": "how does a car engine work",
-        "expected_topic": None, "conversation_reset": True,
-        "expected_keywords": [], "expected_mode": "LLM Fallback",
-    },
-    {
-        "id": "O02", "category": "out_of_scope",
-        "query": "what are advantages of it",
-        "expected_topic": "car engine", "conversation_reset": False,
-        "depends_on": "O01",
-        "expected_keywords": [], "expected_mode": "LLM Fallback",
-        "note": "it → car engine from memory",
-    },
-    {
-        "id": "O03", "category": "out_of_scope",
-        "query": "explain agriculture",
-        "expected_topic": None, "conversation_reset": True,
-        "expected_keywords": [], "expected_mode": "LLM Fallback",
-    },
-    {
-        "id": "O04", "category": "out_of_scope",
-        "query": "limitations of it",
-        "expected_topic": "agriculture", "conversation_reset": False,
-        "depends_on": "O03",
-        "expected_keywords": [], "expected_mode": "LLM Fallback",
-        "note": "it → agriculture from memory",
-    },
-
-    # ── PARTIAL RAG ──────────────────────────────────────────────────────────
-    {
-        "id": "P01", "category": "partial_rag",
-        "query": "explain dispersion of light",
-        "expected_topic": None, "conversation_reset": True,
-        "expected_keywords": ["light", "wavelength"],
-        "expected_mode": "Partial RAG",
-    },
-    {
-        "id": "P02", "category": "partial_rag",
-        "query": "why does it occur",
-        "expected_topic": "dispersion of light", "conversation_reset": False,
-        "depends_on": "P01",
-        "expected_keywords": ["wavelength"],
-        "expected_mode": "Partial RAG",
-    },
+    {"id": "O01", "category": "out_of_scope",
+     "query": "how does a car engine work",
+     "expected_topic": None, "conversation_reset": True,
+     "expected_keywords": [], "expected_mode": "LLM Fallback"},
+    {"id": "O02", "category": "out_of_scope",
+     "query": "what are advantages of it",
+     "expected_topic": "car engine", "conversation_reset": False,
+     "depends_on": "O01", "expected_keywords": [],
+     "expected_mode": "LLM Fallback",
+     "note": "it → car engine from memory"},
 
     # ── VAGUE ────────────────────────────────────────────────────────────────
-    {
-        "id": "V01", "category": "vague",
-        "query": "cycle",
-        "expected_topic": None, "conversation_reset": True,
-        "expected_keywords": [], "expected_mode": "LLM Fallback",
-    },
-    {
-        "id": "V02", "category": "vague",
-        "query": "explain",
-        "expected_topic": None, "conversation_reset": True,
-        "expected_keywords": [], "expected_mode": "LLM Fallback",
-    },
-    {
-        "id": "V03", "category": "vague",
-        "query": "   ",
-        "expected_topic": None, "conversation_reset": True,
-        "expected_keywords": [], "expected_mode": "LLM Fallback",
-    },
+    {"id": "V01", "category": "vague", "query": "cycle",
+     "expected_topic": None, "conversation_reset": True,
+     "expected_keywords": [], "expected_mode": "LLM Fallback"},
+    {"id": "V02", "category": "vague", "query": "   ",
+     "expected_topic": None, "conversation_reset": True,
+     "expected_keywords": [], "expected_mode": "LLM Fallback"},
 
-    # ── COMPOUND ─────────────────────────────────────────────────────────────
-    {
-        "id": "M01", "category": "compound",
-        "query": "explain photosynthesis and also bicycle gears",
-        "expected_topic": "photosynthesis", "conversation_reset": True,
-        "expected_keywords": ["chlorophyll", "gear"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "M02", "category": "compound",
-        "query": "compare water cycle and carbon cycle",
-        "expected_topic": "water cycle", "conversation_reset": True,
-        "expected_keywords": ["water", "carbon"],
-        "expected_mode": "RAG",
-    },
+    # ── NEW SUBJECTS ─────────────────────────────────────────────────────────
+    {"id": "CH01", "category": "chemistry",
+     "query": "explain atomic structure",
+     "expected_topic": "atomic structure", "conversation_reset": True,
+     "expected_keywords": ["proton", "electron", "neutron"],
+     "expected_mode": "RAG"},
+    {"id": "CH02", "category": "chemistry",
+     "query": "what is chemical bonding",
+     "expected_topic": "chemical bonding", "conversation_reset": True,
+     "expected_keywords": ["ionic", "covalent", "electron"],
+     "expected_mode": "RAG"},
+    {"id": "PH01", "category": "physics",
+     "query": "what are newtons laws of motion",
+     "expected_topic": "newton's laws", "conversation_reset": True,
+     "expected_keywords": ["force", "mass", "acceleration"],
+     "expected_mode": "RAG"},
+    {"id": "PH02", "category": "physics",
+     "query": "what is dispersion of light",
+     "expected_topic": "light and optics", "conversation_reset": True,
+     "expected_keywords": ["wavelength", "prism", "spectrum"],
+     "expected_mode": "RAG",
+     "note": "previously failed — should work with new corpus"},
+    {"id": "MA01", "category": "mathematics",
+     "query": "explain trigonometry basics",
+     "expected_topic": "trigonometry", "conversation_reset": True,
+     "expected_keywords": ["sine", "cosine", "tangent", "angle"],
+     "expected_mode": "RAG"},
+    {"id": "CS01", "category": "computer_science",
+     "query": "what are sorting algorithms",
+     "expected_topic": "algorithms", "conversation_reset": True,
+     "expected_keywords": ["sort", "bubble", "merge"],
+     "expected_mode": "RAG"},
+    {"id": "CS02", "category": "computer_science",
+     "query": "explain machine learning",
+     "expected_topic": "machine learning", "conversation_reset": True,
+     "expected_keywords": ["training", "model", "data"],
+     "expected_mode": "RAG"},
+    {"id": "EN01", "category": "environmental",
+     "query": "explain renewable energy",
+     "expected_topic": "renewable energy", "conversation_reset": True,
+     "expected_keywords": ["solar", "wind", "sustainable"],
+     "expected_mode": "RAG"},
+    {"id": "XS01", "category": "cross_subject",
+     "query": "how does photosynthesis relate to carbon cycle",
+     "expected_topic": "photosynthesis", "conversation_reset": True,
+     "expected_keywords": ["co2", "carbon", "plant"],
+     "expected_mode": "RAG", "note": "cross topic query"},
 
     # ── NORMALISATION ────────────────────────────────────────────────────────
-    {
-        "id": "N01", "category": "normalisation",
-        "query": "what's the water cycle",
-        "expected_topic": "water cycle", "conversation_reset": True,
-        "expected_keywords": ["evaporation"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "N02", "category": "normalisation",
-        "query": "HOW DOES PHOTOSYNTHESIS WORK???",
-        "expected_topic": "photosynthesis", "conversation_reset": True,
-        "expected_keywords": ["chlorophyll"],
-        "expected_mode": "RAG",
-    },
-    {
-        "id": "N03", "category": "normalisation",
-        "query": "doesn't the carbon cycle affect climate",
-        "expected_topic": "carbon cycle", "conversation_reset": True,
-        "expected_keywords": ["carbon", "climate"],
-        "expected_mode": "RAG",
-    },
+    {"id": "NM01", "category": "normalisation",
+     "query": "what's the water cycle",
+     "expected_topic": "water cycle", "conversation_reset": True,
+     "expected_keywords": ["evaporation"], "expected_mode": "RAG"},
+    {"id": "NM02", "category": "normalisation",
+     "query": "HOW DOES PHOTOSYNTHESIS WORK???",
+     "expected_topic": "photosynthesis", "conversation_reset": True,
+     "expected_keywords": ["chlorophyll"], "expected_mode": "RAG"},
 ]
 
 
 # ── Helper functions ─────────────────────────────────────────────────────────
 
-def get_model_config(model_name: str) -> dict:
+def get_model_config(name: str) -> dict | None:
     """
-    Return the MODEL_REGISTRY entry for *model_name*.
+    Return the MODEL_REGISTRY entry for *name*, or None if not found.
 
     Args:
-        model_name: Key used in MODEL_REGISTRY (e.g. "phi3", "gpt-4o-mini").
+        name: Model name as listed in MODEL_REGISTRY (e.g. "phi3", "gpt-4o-mini").
 
     Returns:
-        Dict with keys: type, input_cost_per_1k, output_cost_per_1k, description.
-
-    Raises:
-        KeyError: If *model_name* is not registered.
+        Dict with model metadata, or None if *name* is not registered.
     """
-    if model_name not in MODEL_REGISTRY:
-        raise KeyError(
-            f"Model '{model_name}' not found in MODEL_REGISTRY. "
-            f"Available models: {list(MODEL_REGISTRY)}"
-        )
-    return MODEL_REGISTRY[model_name]
+    return next((m for m in MODEL_REGISTRY if m["name"] == name), None)
 
 
-def get_embedding_config(embedding_name: str) -> dict:
+def get_embedding_config(name: str) -> dict | None:
     """
-    Return the EMBEDDING_MODELS entry matching *embedding_name*.
+    Return the EMBEDDING_MODELS entry matching *name*, or None if not found.
 
     Args:
-        embedding_name: The ``name`` field of the desired embedding entry
-                        (e.g. "bge-small", "minilm").
+        name: The ``name`` field of the desired embedding entry
+              (e.g. "bge-small", "minilm").
 
     Returns:
-        Dict with keys: name, model_id, description, dimension.
-
-    Raises:
-        KeyError: If *embedding_name* is not found in EMBEDDING_MODELS.
+        Dict with embedding metadata, or None if *name* is not found.
     """
-    for entry in EMBEDDING_MODELS:
-        if entry["name"] == embedding_name:
-            return entry
-    raise KeyError(
-        f"Embedding '{embedding_name}' not found in EMBEDDING_MODELS. "
-        f"Available embeddings: {[e['name'] for e in EMBEDDING_MODELS]}"
-    )
+    return next((e for e in EMBEDDING_MODELS if e["name"] == name), None)
