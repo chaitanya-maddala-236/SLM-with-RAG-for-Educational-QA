@@ -23,6 +23,7 @@ from langchain_core.documents import Document
 from embeddings import get_embeddings
 from data_loader import get_texts_and_metadatas
 from research_config import DEFAULT_EMBEDDING, CHROMA_DIR_TEMPLATE, COLLECTION_NAME_TEMPLATE
+from glossary_mapper import expand_query_with_topic, get_chunk_size
 
 # ── Chunking constants (used by the scalable retriever) ───────────────────────
 CHUNK_SIZE = 400
@@ -199,54 +200,72 @@ class BM25Index:
 
 # ── Reranking ─────────────────────────────────────────────────────────────────
 
-def rerank_documents(
+def mmr_rerank(
     query: str,
     candidates: list[Document],
     top_k: int = 5,
+    lambda_param: float = 0.5,
     topic_filter: str | None = None,
 ) -> list[Document]:
     """
-    Re-score a pool of candidate documents and return the top-*top_k*.
+    Maximum Marginal Relevance reranking for diversity + relevance balance.
 
-    Uses a lightweight token-overlap scoring model so the system stays fast
-    on CPU / SLM hardware.  A topic-match bonus is applied when *topic_filter*
-    is provided so that topically relevant documents rank higher.
-
-    Retrieve top-20 candidates from the upstream retrieval step, then pass
-    them here to get the best top-5.
+    # RAG Improvement 9: MMR reranking
+    MMR selects documents that are both relevant to the query AND diverse
+    from already-selected documents, reducing redundant results.
 
     Args:
-        query:        The user query (used for relevance scoring).
-        candidates:   Pool of candidate documents (e.g. top-20 from retrieval).
-        top_k:        Number of documents to keep after reranking.
-        topic_filter: If set, give a bonus to documents whose metadata topic
-                      matches this value.
+        query: The user query string.
+        candidates: Pool of candidate documents.
+        top_k: Number of documents to return.
+        lambda_param: Trade-off between relevance (1.0) and diversity (0.0).
+        topic_filter: If set, give bonus to topic-matching documents.
 
     Returns:
-        Re-ranked list of at most *top_k* documents.
+        Reranked list of at most top_k documents.
     """
     if not candidates:
         return []
 
-    scored: list[tuple[Document, float]] = []
-    for doc in candidates:
+    def _relevance(doc: Document) -> float:
         score = _token_overlap_score(query, doc.page_content)
-
-        # Topic-match bonus (encourages topically correct documents)
         if (
             topic_filter
             and doc.metadata.get("topic", "").lower() == topic_filter.lower()
         ):
             score += TOPIC_MATCH_BONUS
-
-        # Penalise very short chunks that rarely contain full answers
         if len(doc.page_content) < MIN_CHUNK_LENGTH:
             score *= 0.5
+        return score
 
-        scored.append((doc, score))
+    relevance_scores = [_relevance(doc) for doc in candidates]
+    selected: list[Document] = []
+    remaining = list(range(len(candidates)))
 
-    scored.sort(key=lambda x: x[1], reverse=True)
-    return [doc for doc, _ in scored[:top_k]]
+    while remaining and len(selected) < top_k:
+        best_idx = None
+        best_score = float("-inf")
+        for i in remaining:
+            rel = relevance_scores[i]
+            if selected:
+                max_sim = max(
+                    _token_overlap_score(candidates[i].page_content, s.page_content)
+                    for s in selected
+                )
+            else:
+                max_sim = 0.0
+            mmr_score = lambda_param * rel - (1 - lambda_param) * max_sim
+            if mmr_score > best_score:
+                best_score = mmr_score
+                best_idx = i
+        selected.append(candidates[best_idx])
+        remaining.remove(best_idx)
+
+    return selected
+
+
+# Backward-compatible alias
+rerank_documents = mmr_rerank
 
 
 # ── Hybrid search (BM25 + vector) ─────────────────────────────────────────────
@@ -261,6 +280,7 @@ def hybrid_search(
     alpha: float = 0.5,
     topic_filter: str | None = None,
     subject_filter: str | None = None,
+    grade_filter: str | None = None,
 ) -> list[Document]:
     """
     Combine BM25 keyword search with semantic vector search.
@@ -283,44 +303,55 @@ def hybrid_search(
                            0.5 gives equal weight to both.
         topic_filter:      Optional Chroma metadata filter on 'topic'.
         subject_filter:    Optional Chroma metadata filter on 'subject'.
+        grade_filter:      Optional Chroma metadata filter on 'grade'.
 
     Returns:
         List of LangChain Document objects ordered by combined relevance.
     """
+    # RAG Improvement 10: Query expansion
+    # Expand query with topic-specific terminology before retrieval
+    if topic_filter:
+        expanded_query = expand_query_with_topic(query, topic_filter)
+    else:
+        expanded_query = query
+
     # ── 1. BM25 retrieval ─────────────────────────────────────────────────────
     bm25_results: dict[str, tuple[Document, float]] = {}
     if bm25_index is not None:
-        raw = bm25_index.search(query, k=bm25_candidates)
+        raw = bm25_index.search(expanded_query, k=bm25_candidates)
         max_bm25 = max((s for _, s in raw), default=1.0) or 1.0
         for doc, score in raw:
             bm25_results[_doc_key(doc)] = (doc, score / max_bm25)
 
     # ── 2. Vector retrieval ───────────────────────────────────────────────────
-    where_clause: dict | None = None
-    if topic_filter and subject_filter:
-        where_clause = {
-            "$and": [
-                {"topic": {"$eq": topic_filter}},
-                {"subject": {"$eq": subject_filter}},
-            ]
-        }
-    elif topic_filter:
-        where_clause = {"topic": {"$eq": topic_filter}}
-    elif subject_filter:
-        where_clause = {"subject": {"$eq": subject_filter}}
+    # RAG Improvement 8: Grade-aware filtering
+    where_filters: list[dict] = []
+    if topic_filter:
+        where_filters.append({"topic": {"$eq": topic_filter}})
+    if subject_filter:
+        where_filters.append({"subject": {"$eq": subject_filter}})
+    if grade_filter:
+        where_filters.append({"grade": {"$eq": grade_filter}})
+
+    if len(where_filters) > 1:
+        where_clause: dict | None = {"$and": where_filters}
+    elif len(where_filters) == 1:
+        where_clause = where_filters[0]
+    else:
+        where_clause = None
 
     try:
         if where_clause:
             vec_raw = vector_store.similarity_search_with_relevance_scores(
-                query, k=vector_candidates, filter=where_clause
+                expanded_query, k=vector_candidates, filter=where_clause
             )
             if len(vec_raw) < 2:
                 vec_raw = vector_store.similarity_search_with_relevance_scores(
-                    query, k=vector_candidates
+                    expanded_query, k=vector_candidates
                 )
         else:
             vec_raw = vector_store.similarity_search_with_relevance_scores(
-                query, k=vector_candidates
+                expanded_query, k=vector_candidates
             )
     except Exception as e:
         print(f"  [HybridSearch] Vector retrieval error: {e}. Falling back to BM25 only.")

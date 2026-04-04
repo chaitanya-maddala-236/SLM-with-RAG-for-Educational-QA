@@ -25,6 +25,8 @@ class TopicRecord:
     frequency: int = 0       # total turns this topic appeared
     last_turn: int = 0       # turn index of the most recent mention
     confidence: float = 0.0  # current confidence score  ∈ [0, 1]
+    subject: str = ""        # subject area associated with this topic
+    grade_context: str = ""  # grade level context for this topic
 
 
 class TopicMemoryManager:
@@ -59,12 +61,14 @@ class TopicMemoryManager:
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
-    def update(self, resolved_topic: str | None) -> None:
+    def update(self, resolved_topic: str | None, subject: str = "", grade: str = "") -> None:
         """
         Record the outcome of one conversation turn.
 
         Args:
             resolved_topic: Topic resolved for this turn, or ``None`` if unknown.
+            subject:        Optional subject area for the resolved topic.
+            grade:          Optional grade level context for the resolved topic.
         """
         self._turn += 1
 
@@ -81,12 +85,18 @@ class TopicMemoryManager:
                     frequency=1,
                     last_turn=self._turn,
                     confidence=1.0,
+                    subject=subject,
+                    grade_context=grade,
                 )
             else:
                 rec = self._registry[resolved_topic]
                 rec.frequency += 1
                 rec.last_turn = self._turn
                 rec.confidence = 1.0  # reset to full on re-mention
+                if subject:
+                    rec.subject = subject
+                if grade:
+                    rec.grade_context = grade
 
     def get_active_topic(self) -> str | None:
         """
@@ -106,6 +116,55 @@ class TopicMemoryManager:
             return None
         best = max(active, key=lambda r: (r.confidence, r.frequency))
         return best.topic
+
+    def get_active_subject(self) -> str | None:
+        """Return subject of the highest-confidence active topic, or None."""
+        active = [
+            rec
+            for rec in self._registry.values()
+            if rec.confidence >= self.ACTIVE_THRESHOLD
+        ]
+        if not active:
+            return None
+        best = max(active, key=lambda r: (r.confidence, r.frequency))
+        return best.subject or None
+
+    def get_topic_subject_pairs(self) -> list[tuple[str, str]]:
+        """Return list of (topic, subject) for all active topics, sorted by descending confidence."""
+        return [
+            (rec.topic, rec.subject)
+            for rec in sorted(
+                self._registry.values(), key=lambda r: r.confidence, reverse=True
+            )
+            if rec.confidence >= self.ACTIVE_THRESHOLD
+        ]
+
+    def get_grade_context(self) -> str | None:
+        """Return grade_context of the highest-confidence active topic, or None."""
+        active = [
+            rec
+            for rec in self._registry.values()
+            if rec.confidence >= self.ACTIVE_THRESHOLD
+        ]
+        if not active:
+            return None
+        best = max(active, key=lambda r: (r.confidence, r.frequency))
+        return best.grade_context or None
+
+    def get_conversation_subjects(self) -> list[str]:
+        """Return unique subjects seen across all topic records (non-empty only)."""
+        seen: list[str] = []
+        for rec in self._registry.values():
+            if rec.subject and rec.subject not in seen:
+                seen.append(rec.subject)
+        return seen
+
+    def detect_subject_change(self, new_subject: str) -> bool:
+        """Return True if new_subject differs from the currently active subject."""
+        current = self.get_active_subject()
+        if current is None:
+            return False
+        return current.lower() != new_subject.lower()
 
     def get_topic_confidence(self, topic: str) -> float:
         """Return the current confidence for a specific topic (0.0 if unseen)."""
@@ -147,6 +206,8 @@ class TopicMemoryManager:
                     "frequency": rec.frequency,
                     "last_turn": rec.last_turn,
                     "confidence": rec.confidence,
+                    "subject": rec.subject,
+                    "grade_context": rec.grade_context,
                 }
                 for topic, rec in self._registry.items()
             },
@@ -163,5 +224,7 @@ class TopicMemoryManager:
                 frequency=rec_data.get("frequency", 0),
                 last_turn=rec_data.get("last_turn", 0),
                 confidence=rec_data.get("confidence", 0.0),
+                subject=rec_data.get("subject", ""),
+                grade_context=rec_data.get("grade_context", ""),
             )
         return mgr
