@@ -23,5 +23,10 @@ rank-bm25>=0.2.2
 # Token counting (Phi-3 compatible tokenizer approximation)
 tiktoken>=0.7.0
 
+# Multimodal extension (CLIP image embeddings + FAISS image index + PDF extraction)
+Pillow>=10.2.0
+faiss-cpu>=1.7.4
+pypdf>=4.0.0
+
 # Utilities
 numpy>=1.26.0

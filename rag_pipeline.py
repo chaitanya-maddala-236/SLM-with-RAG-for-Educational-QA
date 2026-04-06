@@ -82,6 +82,17 @@ from retriever import (
 from evaluation import compute_all_metrics
 from data_loader import get_texts_and_metadatas
 
+# ── Multimodal extension (optional; degrades gracefully when deps are absent) ─
+try:
+    from multimodal_processor import (
+        CLIPEmbedder as _CLIPEmbedder,
+        ImageFAISSIndex as _ImageFAISSIndex,
+        fuse_multimodal_context as _fuse_multimodal_context,
+    )
+    _MULTIMODAL_AVAILABLE = True
+except ImportError:
+    _MULTIMODAL_AVAILABLE = False
+
 # ── Prompt template for the SLM ──────────────────────────────────────────────
 RAG_PROMPT = PromptTemplate(
     input_variables=["context", "question"],
@@ -156,6 +167,29 @@ Keep your answer concise and suitable for the student's level.
 
 Recent conversation:
 {history}
+
+Context:
+{context}
+
+Question: {question}
+
+Answer:""",
+)
+
+# ── Prompt template for multimodal (text + image captions) context ────────────
+# Used in place of RAG_PROMPT / PARTIAL_CONTEXT_PROMPT when image captions are
+# present in the context (i.e. result.has_image_context is True).  The context
+# passed here is built by fuse_multimodal_context() which prepends a
+# "=== Text Context ===" section followed by a
+# "=== Visual Context (from diagrams/images) ===" section containing BLIP
+# captions.  Downstream grounding and evaluation logic work identically.
+MULTIMODAL_PROMPT = PromptTemplate(
+    input_variables=["context", "question"],
+    template="""You are a helpful educational assistant for students.
+Use ONLY the context below (which includes both text and descriptions of relevant
+diagrams or images) to answer the question.
+If the context does not contain enough information, say so clearly.
+Keep your answer concise and suitable for the student's level.
 
 Context:
 {context}
@@ -371,6 +405,8 @@ class PipelineResult:
     latency_ms: float = 0.0
     grounding_score: float = 0.0       # RAG Improvement 14
     estimated_cost_usd: float = 0.0    # RAG Improvement 18
+    image_captions: list[str] = field(default_factory=list)   # Multimodal
+    has_image_context: bool = False                            # Multimodal
 
     def log(self, step: int, message: str) -> None:
         entry = f"[Step {step:>2}] {message}"
@@ -398,6 +434,7 @@ class RAGPipeline:
         model_name: str = "phi3",
         top_k: int = TOP_K,
         retrieval_mode: str = "hybrid",
+        image_index: "_ImageFAISSIndex | None" = None,
     ) -> None:
         self.vector_store = vector_store
         self.top_k = top_k
@@ -421,6 +458,17 @@ class RAGPipeline:
         else:
             print("[Init] rank_bm25 not installed; using vector-only retrieval.")
 
+        # Multimodal extension: optional FAISS image index + CLIP embedder
+        self._image_index = image_index
+        self._clip_embedder: "_CLIPEmbedder | None" = None
+        if self._image_index is not None and _MULTIMODAL_AVAILABLE:
+            try:
+                self._clip_embedder = _CLIPEmbedder()
+                print("[Init] CLIP embedder loaded for multimodal retrieval.")
+            except Exception as exc:
+                print(f"[Init] CLIP embedder unavailable: {exc}")
+                self._clip_embedder = None
+
     # ── Public entry point ────────────────────────────────────────────────────
 
     def _context_similarity(self, query: str, context_text: str) -> float:
@@ -443,15 +491,20 @@ class RAGPipeline:
         user_query: str,
         memory: ConversationMemory,
         topic_manager: TopicMemoryManager | None = None,
+        image_input: bytes | None = None,
     ) -> PipelineResult:
         """
         Execute the full contextual RAG pipeline for one user query.
 
         Args:
-            user_query:     Raw text typed by the user.
-            memory:         Current conversation memory (mutated in-place).
-            topic_manager:  Optional topic memory manager (mutated in-place).
-                            Pass ``None`` to skip topic-manager tracking.
+            user_query:    Raw text typed by the user.
+            memory:        Current conversation memory (mutated in-place).
+            topic_manager: Optional topic memory manager (mutated in-place).
+                           Pass ``None`` to skip topic-manager tracking.
+            image_input:   Optional raw image bytes (PNG/JPEG).  When provided,
+                           the image is encoded with CLIP and used to retrieve
+                           relevant images from the image index.  The resulting
+                           captions are fused into the SLM context.
 
         Returns:
             PipelineResult with answer, metrics, and step log.
@@ -864,6 +917,47 @@ class RAGPipeline:
             )
         result.log(7, f"Retrieved {len(retrieved)} document(s) after reranking.")
 
+        # ── Step 7b: Multimodal image retrieval ───────────────────────────────
+        # Uses the CLIP image index when available.  For image queries the
+        # uploaded image is encoded with CLIP; for text queries the query itself
+        # is encoded with the CLIP text encoder so that relevant images can still
+        # be surfaced.  Captions from matching images are later fused into the
+        # SLM context.
+        _image_hits: list = []
+        if self._image_index is not None and self._clip_embedder is not None:
+            try:
+                if image_input is not None:
+                    # Image query path: encode the uploaded image with CLIP
+                    import io as _io
+                    from PIL import Image as _PILImg  # type: ignore[import]
+                    pil_img = _PILImg.open(_io.BytesIO(image_input)).convert("RGB")
+                    query_vec = self._clip_embedder.embed_image(pil_img)
+                    result.log(
+                        7,
+                        "Step 7b: Image input — encoded with CLIP image encoder",
+                    )
+                else:
+                    # Text query path: encode query text with CLIP text encoder
+                    query_vec = self._clip_embedder.embed_text(retrieval_query)
+                    result.log(
+                        7,
+                        "Step 7b: Text query — searching image index with CLIP "
+                        "text encoder",
+                    )
+                _image_hits = self._image_index.search(query_vec, k=3)
+                caption_count = sum(1 for rec, _ in _image_hits if rec.caption)
+                result.log(
+                    7,
+                    f"Step 7b: Retrieved {len(_image_hits)} image(s), "
+                    f"{caption_count} with caption(s)",
+                )
+                result.image_captions = [
+                    rec.caption for rec, _ in _image_hits if rec.caption
+                ]
+                result.has_image_context = bool(result.image_captions)
+            except Exception as exc:
+                result.log(7, f"Step 7b: Image retrieval error — {exc}")
+
         # ── Determine retrieval similarity score and pipeline mode ────────────
         try:
             score_hits = self.vector_store.similarity_search_with_relevance_scores(
@@ -901,15 +995,33 @@ class RAGPipeline:
         # ── Step 9: SLM generation ────────────────────────────────────────────
         if result.mode == "RAG":
             # RAG Improvement 15: use context budget manager
-            context = _build_context_with_budget(result.retrieved_docs, self.model_name)
-            prompt_text = RAG_PROMPT.format(context=context, question=user_query)
-            result.log(9, "Mode RAG: sending context + question to Phi-3 via Ollama …")
+            # Multimodal: fuse image captions when available
+            if result.has_image_context and _MULTIMODAL_AVAILABLE:
+                context = _fuse_multimodal_context(result.retrieved_docs, _image_hits)
+                prompt_text = MULTIMODAL_PROMPT.format(context=context, question=user_query)
+                result.log(
+                    9,
+                    "Mode RAG (multimodal): fused text + image captions sent to SLM …",
+                )
+            else:
+                context = _build_context_with_budget(result.retrieved_docs, self.model_name)
+                prompt_text = RAG_PROMPT.format(context=context, question=user_query)
+                result.log(9, "Mode RAG: sending context + question to Phi-3 via Ollama …")
         elif result.mode == "Partial RAG":
             # Bugfix (Bug 1): use retrieved docs even when score is below the
             # full RAG threshold instead of discarding them entirely.
             # RAG Improvement 15: use context budget manager
-            context = _build_context_with_budget(result.retrieved_docs, self.model_name)
-            prompt_text = PARTIAL_CONTEXT_PROMPT.format(context=context, question=user_query)
+            # Multimodal: fuse image captions when available
+            if result.has_image_context and _MULTIMODAL_AVAILABLE:
+                context = _fuse_multimodal_context(result.retrieved_docs, _image_hits)
+                prompt_text = MULTIMODAL_PROMPT.format(context=context, question=user_query)
+                result.log(
+                    9,
+                    "Mode Partial RAG (multimodal): fused text + image captions …",
+                )
+            else:
+                context = _build_context_with_budget(result.retrieved_docs, self.model_name)
+                prompt_text = PARTIAL_CONTEXT_PROMPT.format(context=context, question=user_query)
             result.log(
                 9,
                 "Mode Partial RAG: partial context sent to Phi-3 "
