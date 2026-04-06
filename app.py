@@ -33,6 +33,22 @@ from rag_pipeline import RAGPipeline
 # Embedding support: import embedding config for the sidebar selector
 from research_config import EMBEDDING_MODELS, DEFAULT_EMBEDDING, MODEL_REGISTRY
 from data_loader import get_corpus_stats, get_topic_coverage_warnings
+# Multimodal extension: optional — degrades gracefully when deps are absent
+_MM_IMPORT_OK = False
+load_or_build_image_index = None
+try:
+    from multimodal_processor import (
+        load_or_build_image_index,
+        multimodal_available,
+        get_missing_dependencies,
+    )
+    _MM_IMPORT_OK = True
+except ImportError:
+    def multimodal_available() -> bool:
+        return False
+
+    def get_missing_dependencies() -> list:
+        return ["multimodal_processor (not found)"]
 
 # ── Cached resources (load once, reuse across reruns) ────────────────────────
 
@@ -43,6 +59,14 @@ def load_vector_store(embedding_name: str = DEFAULT_EMBEDDING) -> Chroma:
     return build_vector_store(persist=True, embedding_name=embedding_name)
 
 
+@st.cache_resource(show_spinner="🖼️ Loading image index…")
+def load_image_index():
+    """Load the FAISS image index if it exists on disk, otherwise return None."""
+    if not _MM_IMPORT_OK or load_or_build_image_index is None:
+        return None
+    return load_or_build_image_index()  # loads from disk; None if not built yet
+
+
 @st.cache_resource(show_spinner="🤖 Loading model via Ollama…")
 def load_pipeline(
     _vector_store: Chroma,
@@ -50,6 +74,7 @@ def load_pipeline(
     retrieval_mode: str,
     top_k: int,
     embedding_name: str,
+    _image_index=None,
 ) -> RAGPipeline:
     """Initialise the RAG pipeline (model connection check)."""
     return RAGPipeline(
@@ -57,6 +82,7 @@ def load_pipeline(
         model_name=model_name,
         retrieval_mode=retrieval_mode,
         top_k=top_k,
+        image_index=_image_index,
     )
 
 
@@ -90,6 +116,8 @@ def init_session_state() -> None:
         st.session_state.last_grounding_score = None
     if "last_cost" not in st.session_state:
         st.session_state.last_cost = None
+    if "last_image_captions" not in st.session_state:
+        st.session_state.last_image_captions = []
 
 
 # ── Sidebar: Controls only ────────────────────────────────────────────────────
@@ -201,6 +229,21 @@ def render_controls() -> tuple[str, str, str, int]:
                             st.text(f"• {topic}: {count} docs")
             except Exception as e:
                 st.info("Corpus stats unavailable")
+
+        # Multimodal status
+        st.divider()
+        with st.expander("🖼️ Multimodal Status", expanded=False):
+            if multimodal_available():
+                st.success("✅ Multimodal enabled (CLIP + FAISS)")
+                st.caption(
+                    "Upload an image in the chat to query via visual context. "
+                    "To index PDF images run `build_image_index()` from "
+                    "`multimodal_processor.py`."
+                )
+            else:
+                missing = get_missing_dependencies()
+                st.warning("⚠️ Multimodal not available")
+                st.caption("Missing: " + ", ".join(missing))
 
         return selected_model, selected_retrieval, selected_topk, selected_embedding
 
@@ -338,6 +381,13 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
                     if i < len(result_meta["retrieved_docs"]):
                         st.divider()
 
+        # Multimodal: image captions retrieved for this query
+        image_captions = result_meta.get("image_captions") or []
+        if image_captions:
+            with st.expander("🖼️ Visual Context (Image Captions)", expanded=True):
+                for i, cap in enumerate(image_captions, 1):
+                    st.markdown(f"**Image {i}:** {cap}")
+
     # ── Evaluation Metrics ─────────────────────────────────────────────────
     if metrics:
         st.divider()
@@ -369,6 +419,28 @@ def render_chat_column(pipeline: RAGPipeline, embedding_name: str = DEFAULT_EMBE
         "Topics: water cycle · carbon cycle · bicycle · photosynthesis"
     )
 
+    # Multimodal: optional image upload (shown above chat input)
+    uploaded_image_bytes: bytes | None = None
+    # Maximum permitted image upload: 5 MB.  Large files can exhaust server
+    # memory; CLIP inference also benefits from reasonably-sized inputs.
+    _MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
+    if multimodal_available():
+        uploaded_file = st.file_uploader(
+            "📎 Attach an image (optional — for visual queries)",
+            type=["png", "jpg", "jpeg", "webp"],
+            help="Upload a diagram or photo (max 5 MB) to include visual context in your query.",
+            key="image_uploader",
+        )
+        if uploaded_file is not None:
+            if uploaded_file.size > _MAX_IMAGE_BYTES:
+                st.warning(
+                    f"⚠️ Image too large ({uploaded_file.size / 1024 / 1024:.1f} MB). "
+                    "Please upload an image smaller than 5 MB."
+                )
+            else:
+                uploaded_image_bytes = uploaded_file.read()
+                st.image(uploaded_image_bytes, caption="Attached image", use_column_width=True)
+
     # Render existing chat history
     for msg in st.session_state.chat_history:
         with st.chat_message(msg["role"]):
@@ -388,10 +460,14 @@ def render_chat_column(pipeline: RAGPipeline, embedding_name: str = DEFAULT_EMBE
     memory = ConversationMemory.from_list(st.session_state.memory_data, max_turns=5)
     topic_manager = TopicMemoryManager.from_dict(st.session_state.topic_manager_data)
 
-    # Run pipeline
+    # Run pipeline (pass image bytes when an image was uploaded)
     with st.spinner("🤔 Thinking…"):
-        result = pipeline.run(user_query=user_input, memory=memory,
-                              topic_manager=topic_manager)
+        result = pipeline.run(
+            user_query=user_input,
+            memory=memory,
+            topic_manager=topic_manager,
+            image_input=uploaded_image_bytes,
+        )
 
     # Persist memory back to session state
     st.session_state.memory_data = memory.to_list()
@@ -412,9 +488,11 @@ def render_chat_column(pipeline: RAGPipeline, embedding_name: str = DEFAULT_EMBE
         "grounding_score": getattr(result, 'grounding_score', None),
         "estimated_cost_usd": getattr(result, 'estimated_cost_usd', None),
         "topic_confidence_list": getattr(result, 'topic_confidence_list', None),
+        "image_captions": getattr(result, 'image_captions', []),
     }
     st.session_state.last_grounding_score = getattr(result, 'grounding_score', None)
     st.session_state.last_cost = getattr(result, 'estimated_cost_usd', None)
+    st.session_state.last_image_captions = getattr(result, 'image_captions', [])
     # Build session export data for Bonus Feature 5
     st.session_state.session_export_data.append({
         "turn": len(st.session_state.chat_history),
@@ -426,6 +504,7 @@ def render_chat_column(pipeline: RAGPipeline, embedding_name: str = DEFAULT_EMBE
         "grounding_score": getattr(result, 'grounding_score', None),
         "estimated_cost_usd": getattr(result, 'estimated_cost_usd', None),
         "latency_ms": result.latency_ms,
+        "has_image_context": getattr(result, 'has_image_context', False),
     })
 
     # Build assistant message
@@ -460,12 +539,15 @@ def main() -> None:
 
     # Embedding support: load vector store and pipeline keyed on embedding
     vector_store = load_vector_store(st.session_state.selected_embedding)
+    # Multimodal: load FAISS image index (None if not built yet or deps absent)
+    image_index = load_image_index()
     pipeline = load_pipeline(
         vector_store,
         st.session_state.selected_model,
         st.session_state.selected_retrieval,
         st.session_state.selected_topk,
         st.session_state.selected_embedding,
+        image_index,
     )
 
     # Main area: chat (left) | pipeline + metrics (right)
