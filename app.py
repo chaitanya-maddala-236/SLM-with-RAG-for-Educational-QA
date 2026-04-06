@@ -421,16 +421,25 @@ def render_chat_column(pipeline: RAGPipeline, embedding_name: str = DEFAULT_EMBE
 
     # Multimodal: optional image upload (shown above chat input)
     uploaded_image_bytes: bytes | None = None
+    # Maximum permitted image upload: 5 MB.  Large files can exhaust server
+    # memory; CLIP inference also benefits from reasonably-sized inputs.
+    _MAX_IMAGE_BYTES = 5 * 1024 * 1024  # 5 MB
     if multimodal_available():
         uploaded_file = st.file_uploader(
             "📎 Attach an image (optional — for visual queries)",
             type=["png", "jpg", "jpeg", "webp"],
-            help="Upload a diagram or photo to include visual context in your query.",
+            help="Upload a diagram or photo (max 5 MB) to include visual context in your query.",
             key="image_uploader",
         )
         if uploaded_file is not None:
-            uploaded_image_bytes = uploaded_file.read()
-            st.image(uploaded_image_bytes, caption="Attached image", use_column_width=True)
+            if uploaded_file.size > _MAX_IMAGE_BYTES:
+                st.warning(
+                    f"⚠️ Image too large ({uploaded_file.size / 1024 / 1024:.1f} MB). "
+                    "Please upload an image smaller than 5 MB."
+                )
+            else:
+                uploaded_image_bytes = uploaded_file.read()
+                st.image(uploaded_image_bytes, caption="Attached image", use_column_width=True)
 
     # Render existing chat history
     for msg in st.session_state.chat_history:

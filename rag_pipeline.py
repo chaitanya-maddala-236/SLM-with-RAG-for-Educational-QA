@@ -383,6 +383,73 @@ def _build_context_with_budget(docs: list[Document], model_name: str) -> str:
     return "\n\n".join(parts) if parts else (docs[0].page_content if docs else "")
 
 
+def _build_multimodal_context_with_budget(
+    docs: list[Document],
+    image_hits: list,
+    model_name: str,
+) -> str:
+    """
+    Build a multimodal context string (text chunks + image captions) respecting
+    the model's token budget.
+
+    Strategy:
+      1. Allocate the full context budget to text chunks via
+         ``_build_context_with_budget()``.
+      2. Count tokens consumed by the text portion.
+      3. Fill the remaining budget with image captions (one at a time, in
+         relevance order), truncating a caption if it alone would overflow.
+
+    Args:
+        docs:        Retrieved LangChain Document objects.
+        image_hits:  List of (ImageRecord, score) from the image index.
+        model_name:  Model identifier — determines the budget ceiling.
+
+    Returns:
+        Unified context string within token budget.
+    """
+    budget = get_context_budget(model_name)
+
+    # ── Text portion ──────────────────────────────────────────────────────────
+    text_context = _build_context_with_budget(docs, model_name)
+    used = _count_tokens(text_context)
+
+    # ── Caption portion (remaining budget) ────────────────────────────────────
+    caption_parts: list[str] = []
+    for rec, _ in image_hits:
+        if not rec.caption:
+            continue
+        caption_line = f"[Image — {rec.source}, page {rec.page}]: {rec.caption}"
+        cap_tokens = _count_tokens(caption_line)
+        remaining = budget - used
+        if remaining <= 0:
+            break
+        if cap_tokens > remaining:
+            # Truncate caption to fit within remaining budget (word-level approximation)
+            words = caption_line.split()
+            truncated: list[str] = []
+            tok_count = 0
+            for word in words:
+                tok_count += _count_tokens(word)
+                if tok_count > remaining:
+                    break
+                truncated.append(word)
+            caption_line = " ".join(truncated)
+            if not caption_line:
+                break
+        caption_parts.append(caption_line)
+        used += _count_tokens(caption_line)
+
+    # ── Assemble ──────────────────────────────────────────────────────────────
+    parts: list[str] = []
+    if text_context:
+        parts.append("=== Text Context ===")
+        parts.append(text_context)
+    if caption_parts:
+        parts.append("=== Visual Context (from diagrams/images) ===")
+        parts.extend(caption_parts)
+    return "\n\n".join(parts)
+
+
 @dataclass
 class PipelineResult:
     """Container for all outputs produced by one pipeline run."""
@@ -995,13 +1062,16 @@ class RAGPipeline:
         # ── Step 9: SLM generation ────────────────────────────────────────────
         if result.mode == "RAG":
             # RAG Improvement 15: use context budget manager
-            # Multimodal: fuse image captions when available
+            # Multimodal: fuse image captions within remaining token budget
             if result.has_image_context and _MULTIMODAL_AVAILABLE:
-                context = _fuse_multimodal_context(result.retrieved_docs, _image_hits)
+                context = _build_multimodal_context_with_budget(
+                    result.retrieved_docs, _image_hits, self.model_name
+                )
                 prompt_text = MULTIMODAL_PROMPT.format(context=context, question=user_query)
                 result.log(
                     9,
-                    "Mode RAG (multimodal): fused text + image captions sent to SLM …",
+                    "Mode RAG (multimodal): fused text + image captions "
+                    "(budget-capped) sent to SLM …",
                 )
             else:
                 context = _build_context_with_budget(result.retrieved_docs, self.model_name)
@@ -1011,13 +1081,16 @@ class RAGPipeline:
             # Bugfix (Bug 1): use retrieved docs even when score is below the
             # full RAG threshold instead of discarding them entirely.
             # RAG Improvement 15: use context budget manager
-            # Multimodal: fuse image captions when available
+            # Multimodal: fuse image captions within remaining token budget
             if result.has_image_context and _MULTIMODAL_AVAILABLE:
-                context = _fuse_multimodal_context(result.retrieved_docs, _image_hits)
+                context = _build_multimodal_context_with_budget(
+                    result.retrieved_docs, _image_hits, self.model_name
+                )
                 prompt_text = MULTIMODAL_PROMPT.format(context=context, question=user_query)
                 result.log(
                     9,
-                    "Mode Partial RAG (multimodal): fused text + image captions …",
+                    "Mode Partial RAG (multimodal): fused text + image captions "
+                    "(budget-capped) …",
                 )
             else:
                 context = _build_context_with_budget(result.retrieved_docs, self.model_name)

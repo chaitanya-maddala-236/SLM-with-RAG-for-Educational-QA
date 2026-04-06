@@ -7,7 +7,7 @@ Provides:
   - CLIPEmbedder       — CLIP-based image/text encoder (openai/clip-vit-base-patch32)
   - ImageCaptioner     — BLIP-based image captioner (Salesforce/blip-image-captioning-base)
   - ImageFAISSIndex    — FAISS inner-product index for fast image similarity search
-  - ImageRecord        — Metadata container for an indexed image
+  - ImageRecord        — Metadata container for an indexed image (no embedding stored)
   - extract_images_from_pdf()    — Extract images from a PDF file
   - build_image_index()          — Ingest PDFs → CLIP embed → FAISS index
   - load_or_build_image_index()  — Load persisted index or build from scratch
@@ -20,13 +20,17 @@ Design notes:
     image index (shared embedding space).
   - Image embeddings are L2-normalised before insertion; FAISS IndexFlatIP
     (inner product) then gives cosine similarity directly.
+  - Embeddings are stored only inside FAISS (not duplicated on ImageRecord) to
+    keep memory and disk usage lean as the image corpus grows.
+  - Metadata is persisted as JSON (not pickle) so the sidecar file is
+    human-readable and safe to load without code-execution risks.
 """
 
 from __future__ import annotations
 
 import io
+import json
 import os
-import pickle
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
@@ -79,7 +83,7 @@ BLIP_MODEL_ID = "Salesforce/blip-image-captioning-base"
 # ── Default index paths ───────────────────────────────────────────────────────
 
 DEFAULT_INDEX_PATH = "image_index.faiss"
-DEFAULT_META_PATH = "image_meta.pkl"
+DEFAULT_META_PATH = "image_meta.json"
 
 # Embedding dimension for openai/clip-vit-base-patch32
 CLIP_DIM = 512
@@ -89,13 +93,17 @@ CLIP_DIM = 512
 
 @dataclass
 class ImageRecord:
-    """Metadata for a single indexed image."""
+    """Metadata for a single indexed image.
+
+    Note: embeddings are intentionally *not* stored here; they live only inside
+    the FAISS index.  Storing them again in Python would double memory/disk usage
+    for large corpora without any benefit — the index handles all similarity math.
+    """
 
     image_id: str
     source: str       # e.g. PDF filename or "upload"
     page: int         # 1-based page number (0 for uploads)
     caption: str = ""
-    embedding: list[float] = field(default_factory=list)
 
 
 # ── CLIP embedder ─────────────────────────────────────────────────────────────
@@ -213,7 +221,7 @@ class ImageFAISSIndex:
     FAISS inner-product index for fast image embedding similarity search.
 
     Since embeddings are L2-normalised, inner-product equals cosine similarity.
-    Index is persisted to disk as a .faiss file + a .pkl metadata sidecar.
+    Index is persisted to disk as a ``.faiss`` binary file + a JSON metadata sidecar.
     """
 
     def __init__(self, dim: int = CLIP_DIM) -> None:
@@ -228,14 +236,18 @@ class ImageFAISSIndex:
 
     # ── Mutation ──────────────────────────────────────────────────────────────
 
-    def add(self, record: ImageRecord) -> None:
+    def add(self, record: ImageRecord, embedding: list[float]) -> None:
         """
-        Add an ImageRecord (with pre-computed embedding) to the index.
+        Add an ImageRecord to the index.
+
+        The embedding is inserted into FAISS and is *not* stored on the record
+        itself — keeping metadata lean and avoiding duplication.
 
         Args:
-            record: ImageRecord whose ``embedding`` field is populated.
+            record:    ImageRecord with id/source/page/caption fields populated.
+            embedding: Pre-computed, L2-normalised CLIP embedding for this image.
         """
-        vec = np.array(record.embedding, dtype=np.float32).reshape(1, -1)
+        vec = np.array(embedding, dtype=np.float32).reshape(1, -1)
         self._index.add(vec)
         self._records.append(record)
 
@@ -272,10 +284,24 @@ class ImageFAISSIndex:
         index_path: str = DEFAULT_INDEX_PATH,
         meta_path: str = DEFAULT_META_PATH,
     ) -> None:
-        """Persist the FAISS index and metadata to disk."""
+        """Persist the FAISS index and metadata to disk.
+
+        The FAISS index is written as a binary ``.faiss`` file.  Metadata
+        (id, source, page, caption — no embeddings) is written as JSON so the
+        sidecar is human-readable and safe to load without trust concerns.
+        """
         faiss.write_index(self._index, index_path)
-        with open(meta_path, "wb") as fh:
-            pickle.dump(self._records, fh)
+        records_data = [
+            {
+                "image_id": r.image_id,
+                "source": r.source,
+                "page": r.page,
+                "caption": r.caption,
+            }
+            for r in self._records
+        ]
+        with open(meta_path, "w", encoding="utf-8") as fh:
+            json.dump(records_data, fh, ensure_ascii=False, indent=2)
 
     @classmethod
     def load(
@@ -286,9 +312,11 @@ class ImageFAISSIndex:
         """
         Load a previously saved index from disk.
 
+        Metadata is read from a JSON sidecar (safe — no code execution).
+
         Args:
-            index_path: Path to the .faiss file.
-            meta_path:  Path to the .pkl metadata file.
+            index_path: Path to the ``.faiss`` file.
+            meta_path:  Path to the JSON metadata file.
 
         Returns:
             Populated ImageFAISSIndex.
@@ -301,8 +329,17 @@ class ImageFAISSIndex:
         obj: ImageFAISSIndex = cls.__new__(cls)
         obj._index = faiss.read_index(index_path)
         obj._dim = obj._index.d
-        with open(meta_path, "rb") as fh:
-            obj._records = pickle.load(fh)
+        with open(meta_path, "r", encoding="utf-8") as fh:
+            records_data = json.load(fh)
+        obj._records = [
+            ImageRecord(
+                image_id=r["image_id"],
+                source=r["source"],
+                page=r["page"],
+                caption=r.get("caption", ""),
+            )
+            for r in records_data
+        ]
         return obj
 
     # ── Properties ────────────────────────────────────────────────────────────
@@ -378,7 +415,7 @@ def build_image_index(
     Args:
         pdf_paths:    List of PDF file paths to process.
         index_path:   Output path for the FAISS index file.
-        meta_path:    Output path for the metadata pickle.
+        meta_path:    Output path for the JSON metadata sidecar.
         with_captions: Whether to generate BLIP captions (requires extra RAM).
 
     Returns:
@@ -408,9 +445,8 @@ def build_image_index(
                 source=pdf_path,
                 page=page_num,
                 caption=caption,
-                embedding=embedding,
             )
-            idx.add(record)
+            idx.add(record, embedding)
             preview = caption[:60] if caption else "(no caption)"
             print(f"    + {image_id}: '{preview}…'")
 
@@ -434,7 +470,7 @@ def load_or_build_image_index(
     Args:
         pdf_paths:  PDF files to ingest when building a fresh index.
         index_path: Path to the FAISS index file.
-        meta_path:  Path to the metadata pickle.
+        meta_path:  Path to the JSON metadata sidecar.
 
     Returns:
         ImageFAISSIndex, or None if unavailable.
