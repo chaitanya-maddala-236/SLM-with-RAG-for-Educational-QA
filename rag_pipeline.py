@@ -419,25 +419,28 @@ def _build_multimodal_context_with_budget(
         if not rec.caption:
             continue
         caption_line = f"[Image — {rec.source}, page {rec.page}]: {rec.caption}"
+        # Tokenize the full caption once to avoid per-word re-encoding overhead.
         cap_tokens = _count_tokens(caption_line)
         remaining = budget - used
         if remaining <= 0:
             break
         if cap_tokens > remaining:
-            # Truncate caption to fit within remaining budget (word-level approximation)
+            # Truncate: use a binary search over word boundaries (O(log n) encodes
+            # instead of O(n)) to find the longest prefix that fits the budget.
             words = caption_line.split()
-            truncated: list[str] = []
-            tok_count = 0
-            for word in words:
-                tok_count += _count_tokens(word)
-                if tok_count > remaining:
-                    break
-                truncated.append(word)
-            caption_line = " ".join(truncated)
-            if not caption_line:
+            lo, hi = 0, len(words)
+            while lo < hi:
+                mid = (lo + hi + 1) // 2
+                if _count_tokens(" ".join(words[:mid])) <= remaining:
+                    lo = mid
+                else:
+                    hi = mid - 1
+            if lo == 0:
                 break
+            caption_line = " ".join(words[:lo])
+            cap_tokens = _count_tokens(caption_line)
         caption_parts.append(caption_line)
-        used += _count_tokens(caption_line)
+        used += cap_tokens
 
     # ── Assemble ──────────────────────────────────────────────────────────────
     parts: list[str] = []
