@@ -222,19 +222,27 @@ def _build_graphs_for_table(
     input_tokens_vals: list[float] = []
     output_tokens_vals: list[float] = []
 
+    def _row_value_or_nan(row_values: list[str], col_name: str) -> float:
+        index = indices.get(col_name)
+        if index is None or index >= len(row_values):
+            return float("nan")
+        return _to_number_or_nan(row_values[index])
+
     for row in rows:
+        if label_index >= len(row):
+            continue
         label = row[label_index].strip()
         if not label:
             continue
         labels.append(label)
 
-        topic_vals.append(_to_number_or_nan(row[indices["topic_acc"]]) if "topic_acc" in indices else float("nan"))
-        mode_vals.append(_to_number_or_nan(row[indices["mode_acc"]]) if "mode_acc" in indices else float("nan"))
-        latency_vals.append(_to_number_or_nan(row[indices["latency"]]) if "latency" in indices else float("nan"))
-        cost_vals.append(_to_number_or_nan(row[indices["avg_cost"]]) if "avg_cost" in indices else float("nan"))
-        total_tokens_vals.append(_to_number_or_nan(row[indices["avg_total"]]) if "avg_total" in indices else float("nan"))
-        input_tokens_vals.append(_to_number_or_nan(row[indices["avg_input"]]) if "avg_input" in indices else float("nan"))
-        output_tokens_vals.append(_to_number_or_nan(row[indices["avg_output"]]) if "avg_output" in indices else float("nan"))
+        topic_vals.append(_row_value_or_nan(row, "topic_acc"))
+        mode_vals.append(_row_value_or_nan(row, "mode_acc"))
+        latency_vals.append(_row_value_or_nan(row, "latency"))
+        cost_vals.append(_row_value_or_nan(row, "avg_cost"))
+        total_tokens_vals.append(_row_value_or_nan(row, "avg_total"))
+        input_tokens_vals.append(_row_value_or_nan(row, "avg_input"))
+        output_tokens_vals.append(_row_value_or_nan(row, "avg_output"))
 
     def _filter_valid_pairs(xs: list[str], ys: list[float]) -> tuple[list[str], list[float]]:
         valid: list[tuple[str, float]] = []
