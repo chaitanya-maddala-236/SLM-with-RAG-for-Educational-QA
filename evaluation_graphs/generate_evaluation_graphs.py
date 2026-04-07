@@ -14,10 +14,7 @@ import math
 import re
 from pathlib import Path
 
-import matplotlib
-
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
+plt = None
 
 
 DEFAULT_INPUT_FILES = [
@@ -56,6 +53,24 @@ def _parse_args() -> argparse.Namespace:
         help="Directory where graphs will be saved.",
     )
     return parser.parse_args()
+
+
+def _init_plotting_backend() -> bool:
+    global plt
+    try:
+        import matplotlib
+
+        matplotlib.use("Agg")
+        import matplotlib.pyplot as _plt
+
+        plt = _plt
+        return True
+    except ModuleNotFoundError:
+        print(
+            "Missing dependency: matplotlib. "
+            "Install dependencies with `pip install -r requirements.txt`."
+        )
+        return False
 
 
 def _is_separator_line(line: str) -> bool:
@@ -324,6 +339,8 @@ def _build_graphs_for_table(
 
 def main() -> None:
     args = _parse_args()
+    if not _init_plotting_backend():
+        return
     output_dir = Path(args.output_dir)
     output_dir.mkdir(parents=True, exist_ok=True)
 

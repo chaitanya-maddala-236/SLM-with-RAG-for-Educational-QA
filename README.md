@@ -21,9 +21,10 @@ A research-grade **Retrieval-Augmented Generation (RAG)** system for educational
 11. [Setup & Installation](#-setup--installation)
 12. [How to Run](#-how-to-run)
 13. [Evaluation Commands](#-evaluation-commands)
-14. [Example Conversation Flows](#-example-conversation-flows)
-15. [Research Overview](#-research-overview)
-16. [Requirements](#-requirements)
+14. [Generate Evaluation Graphs](#-generate-evaluation-graphs)
+15. [Example Conversation Flows](#-example-conversation-flows)
+16. [Research Overview](#-research-overview)
+17. [Requirements](#-requirements)
 
 ---
 
@@ -668,6 +669,12 @@ After running comparison experiments, generate PNG graphs from result files:
 
 ```bash
 python evaluation_graphs/generate_evaluation_graphs.py
+```
+
+If you see a matplotlib error, install dependencies first:
+
+```bash
+pip install -r requirements.txt
 ```
 
 Custom input/output paths:
