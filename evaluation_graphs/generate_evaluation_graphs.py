@@ -185,6 +185,7 @@ def _save_bar_chart(
     output_path: Path,
     color: str = "#4F81BD",
 ) -> None:
+    assert plt is not None
     if not labels or not values:
         return
     plt.figure(figsize=(max(8, len(labels) * 0.9), 5))
@@ -204,6 +205,7 @@ def _save_grouped_accuracy_chart(
     title: str,
     output_path: Path,
 ) -> None:
+    assert plt is not None
     if not labels:
         return
     x = list(range(len(labels)))
@@ -230,6 +232,7 @@ def _build_graphs_for_table(
     table_index: int,
     output_dir: Path,
 ) -> list[Path]:
+    assert plt is not None
     indices = _get_column_indices(headers)
     label_index = indices["label"]
 
