@@ -31,7 +31,10 @@ from topic_memory_manager import TopicMemoryManager
 from retriever import build_vector_store
 from rag_pipeline import RAGPipeline
 # Embedding support: import embedding config for the sidebar selector
-from research_config import EMBEDDING_MODELS, DEFAULT_EMBEDDING, MODEL_REGISTRY
+from research_config import (
+    EMBEDDING_MODELS, DEFAULT_EMBEDDING, MODEL_REGISTRY,
+    CHUNKING_STRATEGIES, DEFAULT_CHUNKING_STRATEGY,
+)
 from data_loader import get_corpus_stats, get_topic_coverage_warnings
 # Multimodal extension: optional — degrades gracefully when deps are absent
 _MM_IMPORT_OK = False
@@ -52,11 +55,18 @@ except ImportError:
 
 # ── Cached resources (load once, reuse across reruns) ────────────────────────
 
-# Embedding support: cache separately per embedding_name (Streamlit caches by args)
+# Cache separately per (embedding_name, chunking_strategy)
 @st.cache_resource(show_spinner="🔧 Building vector store...")
-def load_vector_store(embedding_name: str = DEFAULT_EMBEDDING) -> Chroma:
-    """Load or build the Chroma vector store for the given embedding model."""
-    return build_vector_store(persist=True, embedding_name=embedding_name)
+def load_vector_store(
+    embedding_name: str = DEFAULT_EMBEDDING,
+    chunking_strategy: str = DEFAULT_CHUNKING_STRATEGY,
+) -> Chroma:
+    """Load or build the Chroma vector store for the given embedding + chunking."""
+    return build_vector_store(
+        persist=True,
+        embedding_name=embedding_name,
+        chunking_strategy=chunking_strategy,
+    )
 
 
 @st.cache_resource(show_spinner="🖼️ Loading image index…")
@@ -67,22 +77,24 @@ def load_image_index():
     return load_or_build_image_index()  # loads from disk; None if not built yet
 
 
-@st.cache_resource(show_spinner="🤖 Loading model via Ollama…")
+@st.cache_resource(show_spinner="🤖 Loading model…")
 def load_pipeline(
     _vector_store: Chroma,
     model_name: str,
     retrieval_mode: str,
     top_k: int,
     embedding_name: str,
+    use_cross_encoder: bool,
     _image_index=None,
 ) -> RAGPipeline:
-    """Initialise the RAG pipeline (model connection check)."""
+    """Initialise the RAG pipeline."""
     return RAGPipeline(
         vector_store=_vector_store,
         model_name=model_name,
         retrieval_mode=retrieval_mode,
         top_k=top_k,
         image_index=_image_index,
+        use_cross_encoder=use_cross_encoder,
     )
 
 
@@ -110,6 +122,10 @@ def init_session_state() -> None:
         st.session_state.selected_retrieval = "hybrid"
     if "selected_topk" not in st.session_state:
         st.session_state.selected_topk = 5
+    if "selected_chunking" not in st.session_state:
+        st.session_state.selected_chunking = DEFAULT_CHUNKING_STRATEGY
+    if "use_cross_encoder" not in st.session_state:
+        st.session_state.use_cross_encoder = False
     if "session_export_data" not in st.session_state:
         st.session_state.session_export_data = []
     if "last_grounding_score" not in st.session_state:
@@ -122,7 +138,7 @@ def init_session_state() -> None:
 
 # ── Sidebar: Controls only ────────────────────────────────────────────────────
 
-def render_controls() -> tuple[str, str, str, int]:
+def render_controls() -> tuple[str, str, str, int, str, bool]:
     with st.sidebar:
         st.title("⚙️ Controls")
         if st.button("🗑️ Clear Conversation", use_container_width=True):
@@ -151,13 +167,48 @@ def render_controls() -> tuple[str, str, str, int]:
 
         st.divider()
         st.subheader("🤖 Model Settings")
+
+        # ── SLM / LLM selector ─────────────────────────────────────────────
         slm_models = [m["name"] for m in MODEL_REGISTRY if m["type"] == "SLM"]
-        selected_model = st.selectbox(
-            "SLM Model",
-            slm_models,
-            index=0 if "phi3" not in slm_models else slm_models.index("phi3"),
-            help="Must be installed via: ollama pull <model>",
+        llm_models = [m["name"] for m in MODEL_REGISTRY if m["type"] == "LLM"]
+
+        model_type_choice = st.radio(
+            "Model type",
+            ["SLM (local Ollama)", "LLM (API)"],
+            help="SLMs run locally via Ollama (free). LLMs use paid APIs.",
+            horizontal=True,
         )
+
+        if model_type_choice == "SLM (local Ollama)":
+            default_idx = slm_models.index("phi3") if "phi3" in slm_models else 0
+            selected_model = st.selectbox(
+                "SLM Model",
+                slm_models,
+                index=default_idx,
+                help="Must be installed via: ollama pull <model>",
+            )
+        else:
+            selected_model = st.selectbox(
+                "LLM (API) Model",
+                llm_models,
+                index=0,
+                help="Requires the corresponding API key set as an env var.",
+            )
+            # Show which API key is needed
+            cfg = next((m for m in MODEL_REGISTRY if m["name"] == selected_model), {})
+            provider = cfg.get("provider", "")
+            key_map = {
+                "openai": "OPENAI_API_KEY",
+                "anthropic": "ANTHROPIC_API_KEY",
+                "google": "GOOGLE_API_KEY",
+            }
+            if provider in key_map:
+                import os as _os
+                env_var = key_map[provider]
+                if _os.environ.get(env_var):
+                    st.success(f"✅ {env_var} is set")
+                else:
+                    st.warning(f"⚠️ {env_var} not set — queries will fail")
 
         selected_retrieval = st.selectbox(
             "Retrieval Mode",
@@ -175,24 +226,50 @@ def render_controls() -> tuple[str, str, str, int]:
         )
 
         st.divider()
-        st.subheader("🔢 Embedding Model")
+        st.subheader("🔢 Embedding & Chunking")
         # Embedding support: let the user pick which embedding to use
         emb_names = [e["name"] for e in EMBEDDING_MODELS]
         selected_embedding = st.selectbox(
             "Embedding Model",
             emb_names,
             index=emb_names.index(DEFAULT_EMBEDDING),
-            help="Each embedding builds its own vector store on first use",
+            help=(
+                "Each embedding builds its own vector store on first use.\n"
+                "nomic-embed-text needs `ollama pull nomic-embed-text`.\n"
+                "text-embedding-3-large needs OPENAI_API_KEY."
+            ),
+        )
+
+        selected_chunking = st.selectbox(
+            "Chunking Strategy",
+            CHUNKING_STRATEGIES,
+            index=CHUNKING_STRATEGIES.index(DEFAULT_CHUNKING_STRATEGY),
+            help=(
+                "fixed: RecursiveCharacterTextSplitter (400 chars)\n"
+                "sliding_window: 400-char window, 200-char step\n"
+                "semantic: sentence-level cosine-similarity grouping"
+            ),
+        )
+
+        use_cross_encoder = st.checkbox(
+            "Cross-Encoder Re-ranking",
+            value=False,
+            help=(
+                "Use a neural cross-encoder to rerank retrieved documents. "
+                "More accurate but slower. Requires sentence-transformers."
+            ),
         )
 
         st.divider()
-        # Embedding support: show active configuration at a glance
+        # Show active configuration at a glance
         st.info(
             f"**Active Config**\n\n"
             f"Model: `{selected_model}`\n\n"
             f"Embedding: `{selected_embedding}`\n\n"
+            f"Chunking: `{selected_chunking}`\n\n"
             f"Retrieval: `{selected_retrieval}`\n\n"
-            f"Top-K: `{selected_topk}`"
+            f"Top-K: `{selected_topk}`\n\n"
+            f"Cross-Encoder: `{'on' if use_cross_encoder else 'off'}`"
         )
 
         st.divider()
@@ -245,7 +322,14 @@ def render_controls() -> tuple[str, str, str, int]:
                 st.warning("⚠️ Multimodal not available")
                 st.caption("Missing: " + ", ".join(missing))
 
-        return selected_model, selected_retrieval, selected_topk, selected_embedding
+        return (
+            selected_model,
+            selected_retrieval,
+            selected_topk,
+            selected_embedding,
+            selected_chunking,
+            use_cross_encoder,
+        )
 
 
 # ── Right panel: pipeline viewer + evaluation table ───────────────────────────
@@ -529,16 +613,28 @@ def main() -> None:
     init_session_state()
 
     # Sidebar: controls + model/embedding/retrieval selection
-    selected_model, selected_retrieval, selected_topk, selected_embedding = render_controls()
+    (
+        selected_model,
+        selected_retrieval,
+        selected_topk,
+        selected_embedding,
+        selected_chunking,
+        use_cross_encoder,
+    ) = render_controls()
 
     # Persist selections to session state
     st.session_state.selected_model = selected_model
     st.session_state.selected_retrieval = selected_retrieval
     st.session_state.selected_topk = selected_topk
     st.session_state.selected_embedding = selected_embedding
+    st.session_state.selected_chunking = selected_chunking
+    st.session_state.use_cross_encoder = use_cross_encoder
 
-    # Embedding support: load vector store and pipeline keyed on embedding
-    vector_store = load_vector_store(st.session_state.selected_embedding)
+    # Load vector store keyed on (embedding, chunking_strategy)
+    vector_store = load_vector_store(
+        st.session_state.selected_embedding,
+        st.session_state.selected_chunking,
+    )
     # Multimodal: load FAISS image index (None if not built yet or deps absent)
     image_index = load_image_index()
     pipeline = load_pipeline(
@@ -547,6 +643,7 @@ def main() -> None:
         st.session_state.selected_retrieval,
         st.session_state.selected_topk,
         st.session_state.selected_embedding,
+        st.session_state.use_cross_encoder,
         image_index,
     )
 
