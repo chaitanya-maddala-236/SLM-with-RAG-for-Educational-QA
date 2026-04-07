@@ -20,7 +20,7 @@ Usage:
 import os
 import warnings
 
-from langchain_community.embeddings import HuggingFaceEmbeddings
+from langchain_huggingface import HuggingFaceEmbeddings
 
 # Embedding support: load config from research_config
 from research_config import EMBEDDING_MODELS, DEFAULT_EMBEDDING

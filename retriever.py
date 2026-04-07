@@ -133,7 +133,7 @@ def chunk_fixed(
     Returns:
         List of LangChain Document objects (one per chunk).
     """
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,

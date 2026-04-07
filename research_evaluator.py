@@ -47,6 +47,12 @@ from research_config import (
     MODELS_TO_EVALUATE,
     RETRIEVAL_MODES,
     RESULTS_FILE,
+    ABLATION_RESULTS_FILE,
+    MODEL_COMPARISON_FILE,
+    EMBEDDING_COMPARISON_FILE,
+    FULL_MATRIX_FILE,
+    TOKEN_COMPARISON_FILE,
+    SLM_VS_LLM_FILE,
     TEST_QUERIES,
     EMBEDDING_MODELS,
     DEFAULT_EMBEDDING,
@@ -173,7 +179,24 @@ class ResearchEvaluator:
 
     @staticmethod
     def _is_model_available(model_name: str) -> bool:
-        """Return True if *model_name* is listed in ``ollama list`` output."""
+        """Return True if *model_name* is available.
+
+        - For Groq models (provider="groq"): checks that GROQ_API_KEY is set.
+        - For other API models (openai/anthropic/google): checks the relevant key.
+        - For Ollama models: checks ``ollama list`` output.
+        """
+        import os as _os
+        cfg = get_model_config(model_name) or {}
+        provider = cfg.get("provider", "ollama")
+        if provider == "groq":
+            return bool(_os.environ.get("GROQ_API_KEY", ""))
+        if provider == "openai":
+            return bool(_os.environ.get("OPENAI_API_KEY", ""))
+        if provider == "anthropic":
+            return bool(_os.environ.get("ANTHROPIC_API_KEY", ""))
+        if provider == "google":
+            return bool(_os.environ.get("GOOGLE_API_KEY", ""))
+        # Default: Ollama — check ollama list
         try:
             proc = subprocess.run(
                 ["ollama", "list"],
@@ -769,6 +792,38 @@ class ResultsWriter:
             self._write_line(f, f"  retrieval_modes={modes}")
             self._write_line(f, "#" * 80)
 
+    def write_comparison_table(
+        self,
+        title: str,
+        headers: list[str],
+        rows: list[list[str]],
+        footer_lines: list[str] | None = None,
+    ) -> None:
+        """
+        Append a formatted comparison table to the results file.
+
+        Writes a section header, a column-header row, divider lines, data rows,
+        and optional footer lines (winners / summary).  This captures the
+        aggregated comparison output that is also printed to stdout so that the
+        file is self-contained.
+
+        Args:
+            title:        Section title (e.g. "MODEL COMPARISON").
+            headers:      Column header strings.
+            rows:         Data rows — each a list of pre-formatted strings.
+            footer_lines: Optional list of summary/winner lines.
+        """
+        with open(self.filepath, "a", encoding="utf-8") as f:
+            self._section(f, title)
+            self._write_line(f, "  " + " | ".join(headers))
+            self._write_line(f, "  " + "-" * 80)
+            for row in rows:
+                self._write_line(f, "  " + " | ".join(row))
+            self._write_line(f, "  " + "=" * 80)
+            if footer_lines:
+                for line in footer_lines:
+                    self._write_line(f, f"  {line}")
+
 
 
 # ── High-level experiment runners ─────────────────────────────────────────────
@@ -827,18 +882,19 @@ def run_single_model_experiment(
 def run_ablation_study(
     model: str = "phi3",
     embedding_name: str = DEFAULT_EMBEDDING,
-    output: str = RESULTS_FILE,
+    output: str = ABLATION_RESULTS_FILE,
 ) -> None:
     """
     Run *model* across all retrieval modes with the given *embedding_name*.
 
     This is the ablation study: same model and embedding, varying retrieval.
-    Prints a comparison table derived entirely from real experiment results.
+    Prints a comparison table derived entirely from real experiment results
+    and writes it to *output* (default: ablation_results.txt).
 
     Args:
-        model:          Ollama model name.
+        model:          Model name (Ollama or Groq).
         embedding_name: Embedding model key (e.g. "bge-small").
-        output:         Path to the results file.
+        output:         Path to the results file (default: ablation_results.txt).
     """
     print(f"\n{'═' * 60}")
     print(f"  ABLATION STUDY — Model: {model} | Embedding: {embedding_name}")
@@ -846,7 +902,7 @@ def run_ablation_study(
     print(f"{'═' * 60}")
 
     if not ResearchEvaluator._is_model_available(model):
-        print(f"  [Skip] Model '{model}' not available in ollama list.")
+        print(f"  [Skip] Model '{model}' not available.")
         return
 
     writer = ResultsWriter(filepath=output)
@@ -882,56 +938,72 @@ def run_ablation_study(
     best_acc_mode = max(ran_modes, key=lambda m: summaries[m]["topic_accuracy"])
     fastest_mode = min(ran_modes, key=lambda m: summaries[m]["avg_latency_ms"])
 
-    # STEP 3 — Print comparison table derived entirely from real data
-    print(f"\n{'═' * 60} ABLATION RESULTS {'═' * 3}")
-    print(f"  Model: {model} | Embedding: {embedding_name}")
-    print(f"  {'─' * 76}")
-    print(
-        f"  {'Mode':<14} | {'TopicAcc':>8} | {'ModeAcc':>7} | "
-        f"{'KwCov':>6} | {'Lat':>8} | {'AvgTok':>7} | {'AvgCost':>12}"
-    )
-    print(f"  {'─' * 76}")
+    # STEP 3 — Build comparison rows
+    col_headers = [
+        f"{'Mode':<14}", f"{'TopicAcc':>8}", f"{'ModeAcc':>7}",
+        f"{'KwCov':>6}", f"{'Lat':>8}", f"{'AvgInTok':>8}",
+        f"{'AvgOutTok':>9}", f"{'AvgTotTok':>9}", f"{'AvgCost':>12}",
+    ]
+    table_rows: list[list[str]] = []
     for mode in ran_modes:
         s = summaries[mode]
         t = token_summaries[mode]
-        print(
-            f"  {mode:<14} | {s['topic_accuracy']*100:>7.1f}% | "
-            f"{s['mode_accuracy']*100:>6.1f}% | "
-            f"{s['avg_keyword_coverage']:>6.3f} | "
-            f"{s['avg_latency_ms']:>6.0f}ms | "
-            f"{t['avg_total_per_query']:>7.0f} | "
-            f"${t['avg_cost_per_query']:>11.6f}"
-        )
-    print(f"  {'═' * 76}")
+        table_rows.append([
+            f"{mode:<14}",
+            f"{s['topic_accuracy']*100:>7.1f}%",
+            f"{s['mode_accuracy']*100:>6.1f}%",
+            f"{s['avg_keyword_coverage']:>6.3f}",
+            f"{s['avg_latency_ms']:>6.0f}ms",
+            f"{t['avg_input_per_query']:>8.0f}",
+            f"{t['avg_output_per_query']:>9.0f}",
+            f"{t['avg_total_per_query']:>9.0f}",
+            f"${t['avg_cost_per_query']:>11.6f}",
+        ])
 
-    # STEP 4 — Print winners derived from real data
-    print(
-        f"  Winner (Accuracy) : {best_acc_mode} "
-        f"({summaries[best_acc_mode]['topic_accuracy']*100:.1f}%)"
-    )
-    print(
-        f"  Winner (Speed)    : {fastest_mode} "
-        f"({summaries[fastest_mode]['avg_latency_ms']:.0f}ms)"
-    )
-    print(f"  All results saved to: {output}")
+    footer_lines = [
+        f"Winner (Accuracy) : {best_acc_mode} ({summaries[best_acc_mode]['topic_accuracy']*100:.1f}%)",
+        f"Winner (Speed)    : {fastest_mode} ({summaries[fastest_mode]['avg_latency_ms']:.0f}ms)",
+        f"Results saved to  : {output}",
+    ]
+
+    # STEP 4 — Print to stdout
+    print(f"\n{'═' * 60} ABLATION RESULTS {'═' * 3}")
+    print(f"  Model: {model} | Embedding: {embedding_name}")
+    print(f"  {'─' * 76}")
+    print("  " + " | ".join(col_headers))
+    print(f"  {'─' * 76}")
+    for row in table_rows:
+        print("  " + " | ".join(row))
+    print(f"  {'═' * 76}")
+    for line in footer_lines:
+        print(f"  {line}")
     print(f"{'═' * 80}")
+
+    # STEP 5 — Write comparison table to file
+    writer.write_comparison_table(
+        title=f"ABLATION COMPARISON  model={model}  embedding={embedding_name}",
+        headers=col_headers,
+        rows=table_rows,
+        footer_lines=footer_lines,
+    )
 
 
 def run_model_comparison(
     retrieval_mode: str = "hybrid",
     embedding_name: str = DEFAULT_EMBEDDING,
-    output: str = RESULTS_FILE,
+    output: str = MODEL_COMPARISON_FILE,
 ) -> None:
     """
     Run all models with the given *retrieval_mode* and *embedding_name*.
 
-    Skips models that are not installed in Ollama.
-    Prints a comparison table derived entirely from real experiment results.
+    Skips models that are not available (Ollama not installed or API key missing).
+    Prints a comparison table derived entirely from real experiment results and
+    writes it to *output* (default: model_comparison_results.txt).
 
     Args:
         retrieval_mode: Retrieval mode to use for all models.
         embedding_name: Embedding model key.
-        output:         Path to the results file.
+        output:         Path to the results file (default: model_comparison_results.txt).
     """
     print(f"\n{'═' * 60}")
     print(f"  MODEL COMPARISON — Retrieval: {retrieval_mode} | Embedding: {embedding_name}")
@@ -948,7 +1020,7 @@ def run_model_comparison(
 
     for model in MODELS_TO_EVALUATE:
         if not ResearchEvaluator._is_model_available(model):
-            print(f"\n  [Skip] Model '{model}' not available in ollama list.")
+            print(f"\n  [Skip] Model '{model}' not available.")
             continue
         evaluator = ResearchEvaluator(
             model=model,
@@ -974,59 +1046,75 @@ def run_model_comparison(
     best_accuracy_model = max(ran_models, key=lambda m: summaries[m]["topic_accuracy"])
     fastest_model = min(ran_models, key=lambda m: summaries[m]["avg_latency_ms"])
 
-    # STEP 3 — Print comparison table derived entirely from real data
-    print(f"\n{'═' * 60} MODEL COMPARISON {'═' * 3}")
-    print(f"  Retrieval: {retrieval_mode} | Embedding: {embedding_name}")
-    print(f"  {'─' * 84}")
-    print(
-        f"  {'Model':<16} | {'Type':<4} | {'TopicAcc':>8} | {'ModeAcc':>7} | "
-        f"{'KwCov':>6} | {'Lat':>8} | {'AvgTok':>7} | {'AvgCost':>12}"
-    )
-    print(f"  {'─' * 84}")
+    # STEP 3 — Build comparison rows
+    col_headers = [
+        f"{'Model':<16}", f"{'Type':<4}", f"{'TopicAcc':>8}", f"{'ModeAcc':>7}",
+        f"{'KwCov':>6}", f"{'Lat':>8}", f"{'AvgInTok':>8}",
+        f"{'AvgOutTok':>9}", f"{'AvgTotTok':>9}", f"{'AvgCost':>12}",
+    ]
+    table_rows: list[list[str]] = []
     for model in ran_models:
         s = summaries[model]
         t = token_summaries[model]
         cfg = get_model_config(model) or {}
-        print(
-            f"  {model:<16} | {cfg.get('type','?'):<4} | "
-            f"{s['topic_accuracy']*100:>7.1f}% | "
-            f"{s['mode_accuracy']*100:>6.1f}% | "
-            f"{s['avg_keyword_coverage']:>6.3f} | "
-            f"{s['avg_latency_ms']:>6.0f}ms | "
-            f"{t['avg_total_per_query']:>7.0f} | "
-            f"${t['avg_cost_per_query']:>11.6f}"
-        )
-    print(f"  {'═' * 84}")
+        table_rows.append([
+            f"{model:<16}",
+            f"{cfg.get('type','?'):<4}",
+            f"{s['topic_accuracy']*100:>7.1f}%",
+            f"{s['mode_accuracy']*100:>6.1f}%",
+            f"{s['avg_keyword_coverage']:>6.3f}",
+            f"{s['avg_latency_ms']:>6.0f}ms",
+            f"{t['avg_input_per_query']:>8.0f}",
+            f"{t['avg_output_per_query']:>9.0f}",
+            f"{t['avg_total_per_query']:>9.0f}",
+            f"${t['avg_cost_per_query']:>11.6f}",
+        ])
 
-    # STEP 4 — Print winners derived from real data
-    print(
-        f"  Winner (Accuracy) : {best_accuracy_model} "
-        f"({summaries[best_accuracy_model]['topic_accuracy']*100:.1f}%)"
-    )
-    print(
-        f"  Winner (Speed)    : {fastest_model} "
-        f"({summaries[fastest_model]['avg_latency_ms']:.0f}ms)"
-    )
-    print(f"  All results saved to: {output}")
+    footer_lines = [
+        f"Winner (Accuracy) : {best_accuracy_model} ({summaries[best_accuracy_model]['topic_accuracy']*100:.1f}%)",
+        f"Winner (Speed)    : {fastest_model} ({summaries[fastest_model]['avg_latency_ms']:.0f}ms)",
+        f"Results saved to  : {output}",
+    ]
+
+    # STEP 4 — Print to stdout
+    print(f"\n{'═' * 60} MODEL COMPARISON {'═' * 3}")
+    print(f"  Retrieval: {retrieval_mode} | Embedding: {embedding_name}")
+    print(f"  {'─' * 84}")
+    print("  " + " | ".join(col_headers))
+    print(f"  {'─' * 84}")
+    for row in table_rows:
+        print("  " + " | ".join(row))
+    print(f"  {'═' * 84}")
+    for line in footer_lines:
+        print(f"  {line}")
     print(f"{'═' * 80}")
+
+    # STEP 5 — Write comparison table to file
+    writer.write_comparison_table(
+        title=f"MODEL COMPARISON  retrieval={retrieval_mode}  embedding={embedding_name}",
+        headers=col_headers,
+        rows=table_rows,
+        footer_lines=footer_lines,
+    )
 
 
 def run_embedding_comparison(
     model: str = "phi3",
     retrieval_mode: str = "hybrid",
-    output: str = RESULTS_FILE,
+    output: str = EMBEDDING_COMPARISON_FILE,
 ) -> None:
     """
     Run TEST_QUERIES with every embedding in EMBEDDING_MODELS.
 
     Uses the given *model* and *retrieval_mode* for all embeddings so results
     are directly comparable.  Prints a summary comparison table derived from
-    real experiment results at the end.
+    real experiment results at the end and writes it to *output*
+    (default: embedding_comparison_results.txt).
 
     Args:
-        model:          Ollama model name.
+        model:          Model name (Ollama or Groq).
         retrieval_mode: Retrieval mode.
-        output:         Path to the results file.
+        output:         Path to the results file (default: embedding_comparison_results.txt).
     """
     print(f"\n{'═' * 56}")
     print(f"  EMBEDDING COMPARISON")
@@ -1035,7 +1123,7 @@ def run_embedding_comparison(
     print(f"{'═' * 56}")
 
     if not ResearchEvaluator._is_model_available(model):
-        print(f"  [Skip] Model '{model}' not available in ollama list.")
+        print(f"  [Skip] Model '{model}' not available.")
         return
 
     writer = ResultsWriter(filepath=output)
@@ -1095,38 +1183,56 @@ def run_embedding_comparison(
         ),
     )
 
-    # STEP 3 — Print comparison table derived entirely from real data
-    print(f"\n{'═' * 56} EMBEDDING COMPARISON {'═' * 3}")
-    print(f"  Model: {model} | Retrieval: {retrieval_mode}")
-    print(f"  {'─' * 84}")
-    print(
-        f"  {'Embedding':<12} | {'Dim':<5} | {'TopicAcc':>8} | "
-        f"{'ModeAcc':>7} | {'KwCov':>6} | {'Lat':>8} | "
-        f"{'AvgTok':>7} | {'AvgCost':>12}"
-    )
-    print(f"  {'─' * 84}")
+    # STEP 3 — Build comparison rows
+    col_headers = [
+        f"{'Embedding':<20}", f"{'Dim':<5}", f"{'TopicAcc':>8}", f"{'ModeAcc':>7}",
+        f"{'KwCov':>6}", f"{'Lat':>8}", f"{'AvgInTok':>8}",
+        f"{'AvgOutTok':>9}", f"{'AvgTotTok':>9}", f"{'AvgCost':>12}",
+    ]
+    table_rows: list[list[str]] = []
     for name in ran_embeddings:
         s = summaries[name]
         t = token_summaries[name]
-        print(
-            f"  {name:<12} | {emb_dims[name]:<5} | "
-            f"{s['topic_accuracy']*100:>7.1f}% | "
-            f"{s['mode_accuracy']*100:>6.1f}% | "
-            f"{s['avg_keyword_coverage']:>6.3f} | "
-            f"{s['avg_latency_ms']:>6.0f}ms | "
-            f"{t['avg_total_per_query']:>7.0f} | "
-            f"${t['avg_cost_per_query']:>11.6f}"
-        )
-    print(f"  {'═' * 84}")
+        table_rows.append([
+            f"{name:<20}",
+            f"{emb_dims[name]:<5}",
+            f"{s['topic_accuracy']*100:>7.1f}%",
+            f"{s['mode_accuracy']*100:>6.1f}%",
+            f"{s['avg_keyword_coverage']:>6.3f}",
+            f"{s['avg_latency_ms']:>6.0f}ms",
+            f"{t['avg_input_per_query']:>8.0f}",
+            f"{t['avg_output_per_query']:>9.0f}",
+            f"{t['avg_total_per_query']:>9.0f}",
+            f"${t['avg_cost_per_query']:>11.6f}",
+        ])
 
-    # STEP 4 — Print winners derived from real data
-    print(f"  Winner (Accuracy)       : {best_acc_emb} "
-          f"({summaries[best_acc_emb]['topic_accuracy']*100:.1f}%)")
-    print(f"  Winner (Speed)          : {fastest_emb} "
-          f"({summaries[fastest_emb]['avg_latency_ms']:.0f}ms)")
-    print(f"  Best Quality/Speed ratio: {best_ratio_emb}")
-    print(f"  All results saved to: {output}")
+    footer_lines = [
+        f"Winner (Accuracy)       : {best_acc_emb} ({summaries[best_acc_emb]['topic_accuracy']*100:.1f}%)",
+        f"Winner (Speed)          : {fastest_emb} ({summaries[fastest_emb]['avg_latency_ms']:.0f}ms)",
+        f"Best Quality/Speed ratio: {best_ratio_emb}",
+        f"Results saved to        : {output}",
+    ]
+
+    # STEP 4 — Print to stdout
+    print(f"\n{'═' * 56} EMBEDDING COMPARISON {'═' * 3}")
+    print(f"  Model: {model} | Retrieval: {retrieval_mode}")
+    print(f"  {'─' * 84}")
+    print("  " + " | ".join(col_headers))
+    print(f"  {'─' * 84}")
+    for row in table_rows:
+        print("  " + " | ".join(row))
+    print(f"  {'═' * 84}")
+    for line in footer_lines:
+        print(f"  {line}")
     print(f"{'═' * 80}")
+
+    # STEP 5 — Write comparison table to file
+    writer.write_comparison_table(
+        title=f"EMBEDDING COMPARISON  model={model}  retrieval={retrieval_mode}",
+        headers=col_headers,
+        rows=table_rows,
+        footer_lines=footer_lines,
+    )
 
 
 def _is_already_in_results(
@@ -1161,15 +1267,12 @@ def _is_already_in_results(
 
 def run_full_matrix(
     retrieval_mode: str = "hybrid",
-    output: str = RESULTS_FILE,
+    output: str = FULL_MATRIX_FILE,
 ) -> None:
     """
     Run every MODEL × EMBEDDING combination (the full research matrix).
 
-    Matrix = len(MODELS_TO_EVALUATE) × len(EMBEDDING_MODELS)
-    = 4 models × 7 embeddings = up to 28 combinations.
-
-    Skips a model entirely if it is not installed in Ollama.
+    Skips a model entirely if it is not available (Ollama/API key).
     Skips a specific (model, embedding) pair if it is already present in the
     results file so that an interrupted run can be resumed safely.
 
@@ -1177,7 +1280,7 @@ def run_full_matrix(
 
     Args:
         retrieval_mode: Retrieval mode used for all combinations.
-        output:         Path to the results file.
+        output:         Path to the results file (default: full_matrix_results.txt).
     """
     emb_names = [e["name"] for e in EMBEDDING_MODELS]
     total = len(MODELS_TO_EVALUATE) * len(EMBEDDING_MODELS)
@@ -1192,10 +1295,11 @@ def run_full_matrix(
     # STEP 1 — Run experiments and collect real results
     matrix_rows: list[dict] = []
     run_idx = 0
+    writer = ResultsWriter(filepath=output)
 
     for model in MODELS_TO_EVALUATE:
         if not ResearchEvaluator._is_model_available(model):
-            print(f"\n  [Skip] Model '{model}' not installed — skipping all embeddings.")
+            print(f"\n  [Skip] Model '{model}' not available — skipping all embeddings.")
             continue
 
         for emb in EMBEDDING_MODELS:
@@ -1223,7 +1327,6 @@ def run_full_matrix(
             summary = evaluator.compute_summary()
             tok = compute_token_summary(results)
 
-            writer = ResultsWriter(filepath=output)
             writer.write(
                 model=model,
                 retrieval_mode=retrieval_mode,
@@ -1240,6 +1343,7 @@ def run_full_matrix(
                     "mode_acc": summary["mode_accuracy"],
                     "kw_cov": summary["avg_keyword_coverage"],
                     "lat": summary["avg_latency_ms"],
+                    "avg_input_tokens": tok["avg_input_per_query"],
                     "avg_tokens": tok["avg_total_per_query"],
                     "avg_cost": tok["avg_cost_per_query"],
                 }
@@ -1249,26 +1353,28 @@ def run_full_matrix(
     if not matrix_rows:
         return
 
-    # STEP 3 — Print full matrix table derived entirely from real data
-    print(f"\n{'═' * 56} FULL RESULTS MATRIX {'═' * 4}")
-    print(
-        f"  {'Model':<10} | {'Embedding':<10} | {'TopicAcc':>8} |"
-        f" {'ModeAcc':>7} | {'KwCov':>6} | {'Lat':>8} | {'AvgTok':>7}"
-    )
-    print(f"  {'─' * 76}")
+    # STEP 3 — Build full matrix table
+    col_headers = [
+        f"{'Model':<14}", f"{'Embedding':<20}", f"{'TopicAcc':>8}",
+        f"{'ModeAcc':>7}", f"{'KwCov':>6}", f"{'Lat':>8}",
+        f"{'AvgInTok':>8}", f"{'AvgTotTok':>9}", f"{'AvgCost':>12}",
+    ]
+    table_rows_out: list[list[str]] = []
     for row in matrix_rows:
-        print(
-            f"  {row['model']:<10} | {row['embedding']:<10} |"
-            f" {row['topic_acc']*100:>7.1f}% | {row['mode_acc']*100:>6.1f}% |"
-            f" {row['kw_cov']:>6.3f} | {row['lat']:>6.0f}ms |"
-            f" {row['avg_tokens']:>7.0f}"
-        )
-    print(f"  {'═' * 76}")
+        table_rows_out.append([
+            f"{row['model']:<14}",
+            f"{row['embedding']:<20}",
+            f"{row['topic_acc']*100:>7.1f}%",
+            f"{row['mode_acc']*100:>6.1f}%",
+            f"{row['kw_cov']:>6.3f}",
+            f"{row['lat']:>6.0f}ms",
+            f"{row.get('avg_input_tokens', 0):>8.0f}",
+            f"{row['avg_tokens']:>9.0f}",
+            f"${row['avg_cost']:>11.6f}",
+        ])
 
-    # STEP 4 — Print winners derived from real data
+    # STEP 4 — Determine winners derived from real data
     best_overall = max(matrix_rows, key=lambda r: r["topic_acc"] + r["mode_acc"])
-
-    # SLM models are those with type "SLM" in the registry
     slm_model_names = [m for m in MODELS_TO_EVALUATE if (get_model_config(m) or {}).get("type") == "SLM"]
     slm_rows = [r for r in matrix_rows if r["model"] in slm_model_names]
     best_slm = (
@@ -1277,8 +1383,6 @@ def run_full_matrix(
         else None
     )
     fastest = min(matrix_rows, key=lambda r: r["lat"])
-
-    # Best value: highest accuracy-to-token ratio; skip rows with no tokens recorded
     value_rows = [r for r in matrix_rows if r["avg_tokens"] > 0]
     best_value = (
         max(value_rows, key=lambda r: (r["topic_acc"] + r["mode_acc"]) / r["avg_tokens"])
@@ -1286,42 +1390,57 @@ def run_full_matrix(
         else best_overall
     )
 
-    print(
-        f"  Best overall      : {best_overall['model']} + {best_overall['embedding']}"
-        f" ({best_overall['topic_acc']*100:.1f}% topic acc)"
-    )
+    footer_lines = [
+        f"Best overall   : {best_overall['model']} + {best_overall['embedding']} ({best_overall['topic_acc']*100:.1f}% topic acc)",
+    ]
     if best_slm:
-        print(
-            f"  Best SLM combo    : {best_slm['model']} + {best_slm['embedding']}"
-            f" ({best_slm['topic_acc']*100:.1f}% topic acc)"
+        footer_lines.append(
+            f"Best SLM combo : {best_slm['model']} + {best_slm['embedding']} ({best_slm['topic_acc']*100:.1f}% topic acc)"
         )
-    print(
-        f"  Fastest combo     : {fastest['model']} + {fastest['embedding']}"
-        f" ({fastest['lat']:.0f}ms)"
-    )
-    print(
-        f"  Best value combo  : {best_value['model']} + {best_value['embedding']}"
-    )
+    footer_lines += [
+        f"Fastest combo  : {fastest['model']} + {fastest['embedding']} ({fastest['lat']:.0f}ms)",
+        f"Best value     : {best_value['model']} + {best_value['embedding']}",
+        f"Results saved to: {output}",
+    ]
+
+    # Print to stdout
+    print(f"\n{'═' * 56} FULL RESULTS MATRIX {'═' * 4}")
+    print("  " + " | ".join(col_headers))
+    print(f"  {'─' * 76}")
+    for row in table_rows_out:
+        print("  " + " | ".join(row))
+    print(f"  {'═' * 76}")
+    for line in footer_lines:
+        print(f"  {line}")
     print(f"{'═' * 80}")
-    print(f"  All results saved to: {output}")
+
+    # Write comparison table to file
+    writer = ResultsWriter(filepath=output)
+    writer.write_comparison_table(
+        title=f"FULL MATRIX  retrieval={retrieval_mode}",
+        headers=col_headers,
+        rows=table_rows_out,
+        footer_lines=footer_lines,
+    )
 
 
 def run_token_comparison(
     retrieval_mode: str = "hybrid",
     embedding_name: str = DEFAULT_EMBEDDING,
-    output: str = RESULTS_FILE,
+    output: str = TOKEN_COMPARISON_FILE,
 ) -> None:
     """
     Compare token usage across all available models.
 
     Runs every model in MODELS_TO_EVALUATE and prints a token-focused
     comparison table.  All numbers are derived from real QueryResult data
-    via compute_token_summary().
+    via compute_token_summary().  Results are written to *output*
+    (default: token_comparison_results.txt).
 
     Args:
         retrieval_mode: Retrieval mode to use for all models.
         embedding_name: Embedding model key.
-        output:         Path to the results file.
+        output:         Path to the results file (default: token_comparison_results.txt).
     """
     print(f"\n{'═' * 60}")
     print(f"  TOKEN COMPARISON — Retrieval: {retrieval_mode} | Embedding: {embedding_name}")
@@ -1338,7 +1457,7 @@ def run_token_comparison(
 
     for model in MODELS_TO_EVALUATE:
         if not ResearchEvaluator._is_model_available(model):
-            print(f"\n  [Skip] Model '{model}' not available in ollama list.")
+            print(f"\n  [Skip] Model '{model}' not available.")
             continue
         evaluator = ResearchEvaluator(
             model=model,
@@ -1365,60 +1484,70 @@ def run_token_comparison(
     lowest_cost = min(ran_models, key=lambda m: token_summaries[m]["avg_cost_per_query"])
     highest_throughput = max(ran_models, key=lambda m: token_summaries[m]["tokens_per_ms"])
 
-    # STEP 3 — Print token comparison table derived entirely from real data
+    # STEP 3 — Build token comparison rows
+    col_headers = [
+        f"{'Model':<16}", f"{'AvgInput':>8}", f"{'AvgOutput':>9}",
+        f"{'AvgTotal':>8}", f"{'TotalTok':>9}", f"{'Tok/ms':>7}", f"{'AvgCost':>12}",
+    ]
+    table_rows: list[list[str]] = []
+    for model in ran_models:
+        t = token_summaries[model]
+        table_rows.append([
+            f"{model:<16}",
+            f"{t['avg_input_per_query']:>8.0f}",
+            f"{t['avg_output_per_query']:>9.0f}",
+            f"{t['avg_total_per_query']:>8.0f}",
+            f"{t['total_tokens']:>9}",
+            f"{t['tokens_per_ms']:>7.4f}",
+            f"${t['avg_cost_per_query']:>11.6f}",
+        ])
+
+    footer_lines = [
+        f"Most efficient    : {most_efficient} ({token_summaries[most_efficient]['avg_total_per_query']:.0f} avg tokens/query)",
+        f"Lowest cost       : {lowest_cost} (${token_summaries[lowest_cost]['avg_cost_per_query']:.6f}/query)",
+        f"Highest throughput: {highest_throughput} ({token_summaries[highest_throughput]['tokens_per_ms']:.4f} tok/ms)",
+        f"Results saved to  : {output}",
+    ]
+
+    # STEP 4 — Print to stdout
     print(f"\n{'═' * 60} TOKEN ANALYSIS {'═' * 5}")
     print(f"  Retrieval: {retrieval_mode} | Embedding: {embedding_name}")
     print(f"  {'─' * 92}")
-    print(
-        f"  {'Model':<16} | {'AvgInput':>8} | {'AvgOutput':>9} | {'AvgTotal':>8} | "
-        f"{'TotalTok':>9} | {'Tok/ms':>7} | {'AvgCost':>12}"
-    )
+    print("  " + " | ".join(col_headers))
     print(f"  {'─' * 92}")
-    for model in ran_models:
-        t = token_summaries[model]
-        print(
-            f"  {model:<16} | {t['avg_input_per_query']:>8.0f} | "
-            f"{t['avg_output_per_query']:>9.0f} | "
-            f"{t['avg_total_per_query']:>8.0f} | "
-            f"{t['total_tokens']:>9} | "
-            f"{t['tokens_per_ms']:>7.4f} | "
-            f"${t['avg_cost_per_query']:>11.6f}"
-        )
+    for row in table_rows:
+        print("  " + " | ".join(row))
     print(f"  {'═' * 92}")
-
-    # STEP 4 — Print token leaders derived from real data
-    print(
-        f"  Most efficient    : {most_efficient} "
-        f"({token_summaries[most_efficient]['avg_total_per_query']:.0f} avg tokens/query)"
-    )
-    print(
-        f"  Lowest cost       : {lowest_cost} "
-        f"(${token_summaries[lowest_cost]['avg_cost_per_query']:.6f}/query)"
-    )
-    print(
-        f"  Highest throughput: {highest_throughput} "
-        f"({token_summaries[highest_throughput]['tokens_per_ms']:.4f} tok/ms)"
-    )
-    print(f"  All results saved to: {output}")
+    for line in footer_lines:
+        print(f"  {line}")
     print(f"{'═' * 80}")
+
+    # STEP 5 — Write comparison table to file
+    writer.write_comparison_table(
+        title=f"TOKEN COMPARISON  retrieval={retrieval_mode}  embedding={embedding_name}",
+        headers=col_headers,
+        rows=table_rows,
+        footer_lines=footer_lines,
+    )
 
 
 def run_slm_vs_llm_comparison(
     retrieval_mode: str = "hybrid",
     embedding_name: str = DEFAULT_EMBEDDING,
-    output: str = RESULTS_FILE,
+    output: str = SLM_VS_LLM_FILE,
 ) -> None:
     """
     Compare SLM models against LLM models using real experiment results.
 
     Model type (SLM / LLM) is determined by MODEL_REGISTRY.  All metric
     values in the output are derived from QueryResult objects returned by
-    run_experiment().
+    run_experiment().  Results are written to *output*
+    (default: slm_vs_llm_results.txt).
 
     Args:
         retrieval_mode: Retrieval mode to use for all models.
         embedding_name: Embedding model key.
-        output:         Path to the results file.
+        output:         Path to the results file (default: slm_vs_llm_results.txt).
     """
     print(f"\n{'═' * 60}")
     print(f"  SLM vs LLM COMPARISON — Retrieval: {retrieval_mode} | Embedding: {embedding_name}")
@@ -1435,7 +1564,7 @@ def run_slm_vs_llm_comparison(
 
     for model in MODELS_TO_EVALUATE:
         if not ResearchEvaluator._is_model_available(model):
-            print(f"\n  [Skip] Model '{model}' not available in ollama list.")
+            print(f"\n  [Skip] Model '{model}' not available.")
             continue
         evaluator = ResearchEvaluator(
             model=model,
@@ -1472,28 +1601,40 @@ def run_slm_vs_llm_comparison(
         if llm_models else None
     )
 
+    # Build row data for a group
+    col_headers = [
+        f"{'Model':<16}", f"{'TopicAcc':>8}", f"{'ModeAcc':>7}",
+        f"{'KwCov':>6}", f"{'Lat':>8}", f"{'AvgInTok':>8}",
+        f"{'AvgOutTok':>9}", f"{'AvgTotTok':>9}", f"{'AvgCost':>12}",
+    ]
+
+    def _build_group_rows(group: list[str]) -> list[list[str]]:
+        rows = []
+        for model in group:
+            s = summaries[model]
+            t = token_summaries[model]
+            rows.append([
+                f"{model:<16}",
+                f"{s['topic_accuracy']*100:>7.1f}%",
+                f"{s['mode_accuracy']*100:>6.1f}%",
+                f"{s['avg_keyword_coverage']:>6.3f}",
+                f"{s['avg_latency_ms']:>6.0f}ms",
+                f"{t['avg_input_per_query']:>8.0f}",
+                f"{t['avg_output_per_query']:>9.0f}",
+                f"{t['avg_total_per_query']:>9.0f}",
+                f"${t['avg_cost_per_query']:>11.6f}",
+            ])
+        return rows
+
     def _print_group(label: str, group: list[str]) -> None:
         if not group:
             return
         print(f"\n  ── {label} ──")
         print(f"  {'─' * 84}")
-        print(
-            f"  {'Model':<16} | {'TopicAcc':>8} | {'ModeAcc':>7} | "
-            f"{'KwCov':>6} | {'Lat':>8} | {'AvgTok':>7} | {'AvgCost':>12}"
-        )
+        print("  " + " | ".join(col_headers))
         print(f"  {'─' * 84}")
-        for model in group:
-            s = summaries[model]
-            t = token_summaries[model]
-            print(
-                f"  {model:<16} | "
-                f"{s['topic_accuracy']*100:>7.1f}% | "
-                f"{s['mode_accuracy']*100:>6.1f}% | "
-                f"{s['avg_keyword_coverage']:>6.3f} | "
-                f"{s['avg_latency_ms']:>6.0f}ms | "
-                f"{t['avg_total_per_query']:>7.0f} | "
-                f"${t['avg_cost_per_query']:>11.6f}"
-            )
+        for row in _build_group_rows(group):
+            print("  " + " | ".join(row))
         print(f"  {'─' * 84}")
 
     # STEP 3 — Print grouped comparison table derived entirely from real data
@@ -1504,26 +1645,44 @@ def run_slm_vs_llm_comparison(
         _print_group("Other", other_models)
     print(f"  {'═' * 84}")
 
-    # STEP 4 — Print group winners derived from real data
+    # STEP 4 — Print / collect group winners derived from real data
+    footer_lines: list[str] = []
     if best_slm:
-        print(
-            f"  Best SLM: {best_slm} "
-            f"({summaries[best_slm]['topic_accuracy']*100:.1f}% topic acc, "
-            f"{summaries[best_slm]['avg_latency_ms']:.0f}ms)"
+        footer_lines.append(
+            f"Best SLM: {best_slm} ({summaries[best_slm]['topic_accuracy']*100:.1f}% topic acc, {summaries[best_slm]['avg_latency_ms']:.0f}ms)"
         )
     if best_llm:
-        print(
-            f"  Best LLM: {best_llm} "
-            f"({summaries[best_llm]['topic_accuracy']*100:.1f}% topic acc, "
-            f"{summaries[best_llm]['avg_latency_ms']:.0f}ms)"
+        footer_lines.append(
+            f"Best LLM: {best_llm} ({summaries[best_llm]['topic_accuracy']*100:.1f}% topic acc, {summaries[best_llm]['avg_latency_ms']:.0f}ms)"
         )
     if best_slm and best_llm:
         winner = best_slm if (
             summaries[best_slm]["topic_accuracy"] >= summaries[best_llm]["topic_accuracy"]
         ) else best_llm
-        print(f"  Overall winner: {winner} ({(get_model_config(winner) or {}).get('type','?')})")
-    print(f"  All results saved to: {output}")
+        footer_lines.append(f"Overall winner: {winner} ({(get_model_config(winner) or {}).get('type','?')})")
+    footer_lines.append(f"Results saved to: {output}")
+
+    for line in footer_lines:
+        print(f"  {line}")
     print(f"{'═' * 80}")
+
+    # STEP 5 — Write all groups + footer to file
+    all_rows: list[list[str]] = []
+    for label, group in [
+        ("SLM", slm_models),
+        ("LLM", llm_models),
+        ("Other", other_models),
+    ]:
+        if group:
+            all_rows.append([f"── {label} ──"] + [""] * (len(col_headers) - 1))
+            all_rows.extend(_build_group_rows(group))
+
+    writer.write_comparison_table(
+        title=f"SLM vs LLM COMPARISON  retrieval={retrieval_mode}  embedding={embedding_name}",
+        headers=col_headers,
+        rows=all_rows,
+        footer_lines=footer_lines,
+    )
 
 
 # ── CLI entry point ───────────────────────────────────────────────────────────
@@ -1579,8 +1738,11 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output",
-        default=RESULTS_FILE,
-        help=f"Results file path (default: {RESULTS_FILE}).",
+        default=None,
+        help=(
+            "Override results file path. If omitted, each comparison mode writes "
+            "to its own default file (e.g. model_comparison_results.txt)."
+        ),
     )
     return parser.parse_args()
 
@@ -1601,7 +1763,7 @@ def main() -> None:
     model = args.model
     retrieval = args.retrieval
     embedding = args.embedding
-    output = args.output
+    output = args.output  # None → each function uses its own default file
 
     # Route to the appropriate function by mode
     if mode == "single":
@@ -1609,50 +1771,52 @@ def main() -> None:
             model=model,
             retrieval_mode=retrieval,
             embedding_name=embedding,
-            output=output,
+            **({} if output is None else {"output": output}),
         )
     elif mode == "ablation":
         run_ablation_study(
             model=model,
             embedding_name=embedding,
-            output=output,
+            **({} if output is None else {"output": output}),
         )
     elif mode == "model_comparison":
         run_model_comparison(
             retrieval_mode=retrieval,
             embedding_name=embedding,
-            output=output,
+            **({} if output is None else {"output": output}),
         )
     elif mode == "embedding_comparison":
         run_embedding_comparison(
             model=model,
             retrieval_mode=retrieval,
-            output=output,
+            **({} if output is None else {"output": output}),
         )
     elif mode == "full_matrix":
         run_full_matrix(
             retrieval_mode=retrieval,
-            output=output,
+            **({} if output is None else {"output": output}),
         )
     elif mode == "token_comparison":
         run_token_comparison(
             retrieval_mode=retrieval,
             embedding_name=embedding,
-            output=output,
+            **({} if output is None else {"output": output}),
         )
     elif mode == "slm_vs_llm":
         run_slm_vs_llm_comparison(
             retrieval_mode=retrieval,
             embedding_name=embedding,
-            output=output,
+            **({} if output is None else {"output": output}),
         )
     elif mode == "full":
-        run_ablation_study(model, embedding, output)
-        run_model_comparison(retrieval, embedding, output)
-        run_embedding_comparison(model, retrieval, output)
-        run_full_matrix(retrieval, output)
-        run_token_comparison(retrieval, embedding, output)
-        run_slm_vs_llm_comparison(retrieval, embedding, output)
+        # "full" mode: each comparison writes to its own default file unless overridden
+        _out = {} if output is None else {"output": output}
+        run_ablation_study(model, embedding, **_out)
+        run_model_comparison(retrieval, embedding, **_out)
+        run_embedding_comparison(model, retrieval, **_out)
+        run_full_matrix(retrieval, **_out)
+        run_token_comparison(retrieval, embedding, **_out)
+        run_slm_vs_llm_comparison(retrieval, embedding, **_out)
 
 
 if __name__ == "__main__":

@@ -12,8 +12,13 @@ Run with:
     streamlit run app.py
 """
 
+import os
 import json
 import datetime
+
+# Suppress torchvision file-watcher warnings
+os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
+
 import streamlit as st
 from langchain_community.vectorstores import Chroma
 

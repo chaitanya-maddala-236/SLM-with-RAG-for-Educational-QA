@@ -66,18 +66,46 @@ MODEL_REGISTRY = [
      "model_id": "gemini-1.5-flash", "params_billions": None,
      "context_window": 1000000, "cost_per_1k_input_tokens": 0.000075,
      "cost_per_1k_output_tokens": 0.0003},
+    # ── Groq API LLMs ─────────────────────────────────────────────────────────
+    {"name": "groq-llama3-8b", "type": "LLM", "provider": "groq",
+     "model_id": "llama3-8b-8192", "params_billions": 8.0,
+     "context_window": 8192, "cost_per_1k_input_tokens": 0.00005,
+     "cost_per_1k_output_tokens": 0.00008},
+    {"name": "groq-llama3-70b", "type": "LLM", "provider": "groq",
+     "model_id": "llama-3.3-70b-versatile", "params_billions": 70.0,
+     "context_window": 128000, "cost_per_1k_input_tokens": 0.00059,
+     "cost_per_1k_output_tokens": 0.00079},
+    {"name": "groq-mixtral", "type": "LLM", "provider": "groq",
+     "model_id": "mixtral-8x7b-32768", "params_billions": 56.0,
+     "context_window": 32768, "cost_per_1k_input_tokens": 0.00024,
+     "cost_per_1k_output_tokens": 0.00024},
+    {"name": "groq-gemma2", "type": "LLM", "provider": "groq",
+     "model_id": "gemma2-9b-it", "params_billions": 9.0,
+     "context_window": 8192, "cost_per_1k_input_tokens": 0.00020,
+     "cost_per_1k_output_tokens": 0.00020},
 ]
 
 # ── Derived model lists ──────────────────────────────────────────────────────
 
 SLM_MODELS = [m["name"] for m in MODEL_REGISTRY if m["type"] == "SLM"]
 LLM_MODELS = [m["name"] for m in MODEL_REGISTRY if m["type"] == "LLM"]
+GROQ_MODELS = [m["name"] for m in MODEL_REGISTRY if m.get("provider") == "groq"]
 
 # ── Experiment axes ──────────────────────────────────────────────────────────
 
-MODELS_TO_EVALUATE = SLM_MODELS
+# MODELS_TO_EVALUATE includes both local SLMs and Groq LLMs for comparison.
+# Groq models require GROQ_API_KEY to be set in the environment.
+MODELS_TO_EVALUATE = SLM_MODELS + GROQ_MODELS
 RETRIEVAL_MODES = ["vector_only", "bm25_only", "hybrid"]
+
+# ── Per-comparison output files (one file per comparison type) ────────────────
 RESULTS_FILE = "research_results.txt"
+ABLATION_RESULTS_FILE = "ablation_results.txt"
+MODEL_COMPARISON_FILE = "model_comparison_results.txt"
+EMBEDDING_COMPARISON_FILE = "embedding_comparison_results.txt"
+FULL_MATRIX_FILE = "full_matrix_results.txt"
+TOKEN_COMPARISON_FILE = "token_comparison_results.txt"
+SLM_VS_LLM_FILE = "slm_vs_llm_results.txt"
 
 # Embedding support: available embedding models for research evaluation
 EMBEDDING_MODELS = [
