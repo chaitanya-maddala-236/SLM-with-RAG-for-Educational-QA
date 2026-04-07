@@ -62,6 +62,13 @@ try:
 except ImportError:
     pass
 
+_GROQ_AVAILABLE = False
+try:
+    from langchain_groq import ChatGroq as _ChatGroq  # type: ignore[import]
+    _GROQ_AVAILABLE = True
+except ImportError:
+    pass
+
 # ── Token counting (tiktoken with graceful fallback) ──────────────────────────
 try:
     import tiktoken as _tiktoken
@@ -524,11 +531,13 @@ def _build_llm(model_name: str, temperature: float = 0.1):
       - ``openai``    → ChatOpenAI  (requires OPENAI_API_KEY)
       - ``anthropic`` → ChatAnthropic (requires ANTHROPIC_API_KEY)
       - ``google``    → ChatGoogleGenerativeAI (requires GOOGLE_API_KEY)
+      - ``groq``      → ChatGroq (requires GROQ_API_KEY)
 
     Falls back to OllamaLLM for any unknown provider.
 
     Args:
-        model_name:  Name as listed in MODEL_REGISTRY (e.g. "gpt-4.1").
+        model_name:  Name as listed in MODEL_REGISTRY (e.g. "gpt-4.1",
+                     "groq-llama3-8b").
         temperature: Sampling temperature passed to the model.
 
     Returns:
@@ -587,6 +596,21 @@ def _build_llm(model_name: str, temperature: float = 0.1):
             model=model_id,
             temperature=temperature,
             google_api_key=api_key,
+        )
+
+    if provider == "groq":
+        if not _GROQ_AVAILABLE:
+            raise ImportError(
+                "langchain-groq is not installed. "
+                "Run: pip install langchain-groq"
+            )
+        api_key = _os.environ.get("GROQ_API_KEY", "")
+        if not api_key:
+            raise ValueError("GROQ_API_KEY environment variable is not set.")
+        return _ChatGroq(
+            model=model_id,
+            temperature=temperature,
+            api_key=api_key,
         )
 
     # Default: Ollama (local)

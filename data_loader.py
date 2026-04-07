@@ -242,7 +242,7 @@ def get_chunked_texts_and_metadatas(
           - metadatas: Corresponding metadata dicts (topic, subject, grade,
                        plus ``chunk_index`` and ``source_doc_index``).
     """
-    from langchain.text_splitter import RecursiveCharacterTextSplitter
+    from langchain_text_splitters import RecursiveCharacterTextSplitter
 
     splitter = RecursiveCharacterTextSplitter(
         chunk_size=chunk_size,
