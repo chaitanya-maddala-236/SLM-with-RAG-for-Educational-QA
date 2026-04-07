@@ -12,11 +12,11 @@ from __future__ import annotations
 import argparse
 import math
 import re
+from types import ModuleType
 from pathlib import Path
-from typing import Any
 
 # Lazy-initialized so `--help` works even when matplotlib is not installed.
-plt: Any | None = None
+plt: ModuleType | None = None
 
 
 DEFAULT_INPUT_FILES = [
@@ -72,6 +72,9 @@ def _init_plotting_backend() -> bool:
             "matplotlib not found. "
             "Please ensure dependencies are installed: `pip install -r requirements.txt`."
         )
+        return False
+    except Exception as exc:
+        print(f"Failed to initialize matplotlib backend: {exc}")
         return False
 
 
