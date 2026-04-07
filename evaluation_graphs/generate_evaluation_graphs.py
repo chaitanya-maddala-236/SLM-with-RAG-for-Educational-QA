@@ -239,7 +239,7 @@ def _build_graphs_for_table(
     def _filter_valid_pairs(xs: list[str], ys: list[float]) -> tuple[list[str], list[float]]:
         valid: list[tuple[str, float]] = []
         for x, y in zip(xs, ys):
-            if y is None or math.isnan(y):
+            if math.isnan(y):
                 continue
             valid.append((x, y))
         if not valid:
@@ -252,8 +252,6 @@ def _build_graphs_for_table(
     ) -> tuple[list[str], list[float], list[float]]:
         valid: list[tuple[str, float, float]] = []
         for x, y1, y2 in zip(xs, ys1, ys2):
-            if y1 is None or y2 is None:
-                continue
             if math.isnan(y1) or math.isnan(y2):
                 continue
             valid.append((x, y1, y2))
@@ -266,9 +264,11 @@ def _build_graphs_for_table(
     prefix = f"{base_name}_table_{table_index}"
 
     if "topic_acc" in indices and "mode_acc" in indices:
-        p = output_dir / f"{prefix}_accuracy.png"
-        _save_grouped_accuracy_chart(labels, topic_vals, mode_vals, f"{base_name} - Accuracy", p)
-        created.append(p)
+        labels_clean, topic_clean, mode_clean = _filter_valid_triples(labels, topic_vals, mode_vals)
+        if topic_clean and mode_clean:
+            p = output_dir / f"{prefix}_accuracy.png"
+            _save_grouped_accuracy_chart(labels_clean, topic_clean, mode_clean, f"{base_name} - Accuracy", p)
+            created.append(p)
 
     if "latency" in indices:
         labels_clean, latency_clean = _filter_valid_pairs(labels, latency_vals)
