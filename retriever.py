@@ -465,6 +465,9 @@ class BM25Index:
 
     def __init__(self, docs: list[Document]) -> None:
         self.docs = docs
+        if not docs:
+            self._index = None
+            return
         tokenised = [_tokenise(d.page_content) for d in docs]
         self._index = _BM25Okapi(tokenised)
 
@@ -480,7 +483,7 @@ class BM25Index:
             List of (Document, score) tuples ordered by descending BM25 score.
         """
         q_tokens = _tokenise(query)
-        if not q_tokens:
+        if self._index is None or not q_tokens:
             return []
         scores = self._index.get_scores(q_tokens)
         ranked = sorted(
