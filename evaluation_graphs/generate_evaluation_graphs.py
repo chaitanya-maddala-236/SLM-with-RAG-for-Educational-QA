@@ -14,6 +14,7 @@ import math
 import re
 from pathlib import Path
 
+# Lazy-initialized so `--help` works even when matplotlib is not installed.
 plt = None
 
 
@@ -261,7 +262,7 @@ def _build_graphs_for_table(
 
     def _filter_valid_pairs(xs: list[str], ys: list[float]) -> tuple[list[str], list[float]]:
         valid: list[tuple[str, float]] = []
-        for x, y in zip(xs, ys):
+        for x, y in zip(xs, ys, strict=True):
             if math.isnan(y):
                 continue
             valid.append((x, y))
@@ -274,7 +275,7 @@ def _build_graphs_for_table(
         xs: list[str], ys1: list[float], ys2: list[float]
     ) -> tuple[list[str], list[float], list[float]]:
         valid: list[tuple[str, float, float]] = []
-        for x, y1, y2 in zip(xs, ys1, ys2):
+        for x, y1, y2 in zip(xs, ys1, ys2, strict=True):
             if math.isnan(y1) or math.isnan(y2):
                 continue
             valid.append((x, y1, y2))
