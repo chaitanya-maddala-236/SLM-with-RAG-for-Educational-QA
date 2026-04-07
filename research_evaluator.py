@@ -130,6 +130,7 @@ class QueryResult:
     output_tokens: int = 0
     total_tokens: int = 0
     estimated_cost_usd: float = 0.0
+    hallucination_rate: float = 0.0
 
 
 # ── ResearchEvaluator ─────────────────────────────────────────────────────────
@@ -189,7 +190,6 @@ class ResearchEvaluator:
         """Return True if *model_name* is available.
 
         - For Groq models (provider="groq"): checks that GROQ_API_KEY is set.
-        - For other API models (openai/anthropic/google): checks the relevant key.
         - For Ollama models: checks ``ollama list`` output.
         """
         import os as _os
@@ -197,12 +197,6 @@ class ResearchEvaluator:
         provider = cfg.get("provider", "ollama")
         if provider == "groq":
             return bool(_os.environ.get("GROQ_API_KEY", ""))
-        if provider == "openai":
-            return bool(_os.environ.get("OPENAI_API_KEY", ""))
-        if provider == "anthropic":
-            return bool(_os.environ.get("ANTHROPIC_API_KEY", ""))
-        if provider == "google":
-            return bool(_os.environ.get("GOOGLE_API_KEY", ""))
         # Default: Ollama — check ollama list
         try:
             proc = subprocess.run(
@@ -348,6 +342,8 @@ class ResearchEvaluator:
             input_tokens * cfg.get("input_cost_per_1k", 0.0) / 1000.0
             + output_tokens * cfg.get("output_cost_per_1k", 0.0) / 1000.0
         )
+        faithfulness = float(result.metrics.get("Faithfulness", 0.0))
+        hallucination_rate = max(0.0, min(1.0, 1.0 - faithfulness))
 
         print(f" → {actual_mode} | topic={actual_topic} | {latency_ms:.0f}ms")
 
@@ -369,6 +365,7 @@ class ResearchEvaluator:
             output_tokens=output_tokens,
             total_tokens=total_tokens,
             estimated_cost_usd=estimated_cost_usd,
+            hallucination_rate=hallucination_rate,
         )
 
     # ── Experiment runner ─────────────────────────────────────────────────────
@@ -422,6 +419,7 @@ class ResearchEvaluator:
                 "mode_accuracy": 0.0,
                 "avg_keyword_coverage": 0.0,
                 "avg_latency_ms": 0.0,
+                "avg_hallucination_rate": 0.0,
                 "avg_metrics": {},
                 "rag_count": 0,
                 "partial_rag_count": 0,
@@ -446,8 +444,12 @@ class ResearchEvaluator:
             avg_latency_ms = (
                 sum(r.latency_ms for r in successful) / len(successful)
             )
+            avg_hallucination_rate = (
+                sum(r.hallucination_rate for r in successful) / len(successful)
+            )
         else:
             topic_accuracy = mode_accuracy = avg_keyword_coverage = avg_latency_ms = 0.0
+            avg_hallucination_rate = 0.0
 
         # Average evaluation metrics
         all_metric_keys: set[str] = set()
@@ -491,6 +493,9 @@ class ResearchEvaluator:
                 "avg_latency_ms": round(
                     sum(r.latency_ms for r in ok) / len(ok), 1
                 ) if ok else 0.0,
+                "avg_hallucination_rate": round(
+                    sum(r.hallucination_rate for r in ok) / len(ok), 3
+                ) if ok else 0.0,
             }
 
         return {
@@ -501,6 +506,7 @@ class ResearchEvaluator:
             "mode_accuracy": round(mode_accuracy, 4),
             "avg_keyword_coverage": round(avg_keyword_coverage, 4),
             "avg_latency_ms": round(avg_latency_ms, 1),
+            "avg_hallucination_rate": round(avg_hallucination_rate, 4),
             "avg_metrics": avg_metrics,
             "rag_count": rag_count,
             "partial_rag_count": partial_rag_count,
@@ -617,6 +623,7 @@ class ResultsWriter:
 
     def __init__(self, filepath: str = RESULTS_FILE) -> None:
         self.filepath = Path(filepath)
+        self.filepath.parent.mkdir(parents=True, exist_ok=True)
 
     # ── Private helpers ───────────────────────────────────────────────────────
 
@@ -675,6 +682,7 @@ class ResultsWriter:
                 f,
                 f"  {'ID':<6} {'CAT':<20} {'EXP_MODE':<14} {'ACT_MODE':<14}"
                 f" {'T_OK':<6} {'M_OK':<6} {'KW':<6} {'LAT_MS':<8}"
+                f" {'HALL':<6}"
                 f" {'IN_TOK':<8} {'OUT_TOK':<9} {'TOT_TOK':<9}"
                 f" {'COST_USD':<12} QUERY",
             )
@@ -684,12 +692,13 @@ class ResultsWriter:
                 m_ok = "Y" if r.mode_correct else "N"
                 kw = f"{r.keyword_coverage:.2f}"
                 lat = f"{r.latency_ms:.0f}"
+                hall = f"{r.hallucination_rate:.2f}"
                 query_snippet = r.query[:40].replace("\n", " ")
                 self._write_line(
                     f,
                     f"  {r.query_id:<6} {r.category:<20} {r.expected_mode:<14}"
                     f" {r.actual_mode:<14} {t_ok:<6} {m_ok:<6} {kw:<6}"
-                    f" {lat:<8} {r.input_tokens:<8} {r.output_tokens:<9}"
+                    f" {lat:<8} {hall:<6} {r.input_tokens:<8} {r.output_tokens:<9}"
                     f" {r.total_tokens:<9} {r.estimated_cost_usd:<12.6f}"
                     f" {query_snippet!r}",
                 )
@@ -712,7 +721,8 @@ class ResultsWriter:
             self._write_line(
                 f,
                 f"  avg_keyword_coverage={summary['avg_keyword_coverage']:.4f}"
-                f"  avg_latency={summary['avg_latency_ms']}ms",
+                f"  avg_latency={summary['avg_latency_ms']}ms"
+                f"  avg_hallucination_rate={summary.get('avg_hallucination_rate', 0.0):.4f}",
             )
             self._write_line(
                 f,
@@ -744,7 +754,7 @@ class ResultsWriter:
             self._write_line(
                 f,
                 f"  {'CATEGORY':<22} {'N':<5} {'TOPIC_ACC':<12}"
-                f" {'MODE_ACC':<10} {'KW_COV':<8} {'LAT_MS'}",
+                f" {'MODE_ACC':<10} {'KW_COV':<8} {'LAT_MS':<8} {'HALL'}",
             )
             self._write_line(f, "  " + "-" * 70)
             for cat, stats in summary.get("per_category", {}).items():
@@ -754,7 +764,8 @@ class ResultsWriter:
                     f" {stats['topic_accuracy']*100:<12.1f}"
                     f" {stats['mode_accuracy']*100:<10.1f}"
                     f" {stats['avg_keyword_coverage']:<8.3f}"
-                    f" {stats['avg_latency_ms']:.1f}",
+                    f" {stats['avg_latency_ms']:<8.1f}"
+                    f" {stats.get('avg_hallucination_rate', 0.0):.3f}",
                 )
 
             self._write_line(f, "=" * 80)
@@ -838,7 +849,7 @@ class ResultsWriter:
 # ── High-level experiment runners ─────────────────────────────────────────────
 
 def run_single_model_experiment(
-    model: str = "phi3",
+    model: str = "groq-llama3-8b",
     retrieval_mode: str = "hybrid",
     embedding_name: str = DEFAULT_EMBEDDING,
     output: str = RESULTS_FILE,
@@ -884,12 +895,13 @@ def run_single_model_experiment(
         f"  topic_accuracy={summary['topic_accuracy']*100:.2f}%"
         f"  mode_accuracy={summary['mode_accuracy']*100:.2f}%"
         f"  avg_latency={summary['avg_latency_ms']}ms"
+        f"  hallucination_rate={summary.get('avg_hallucination_rate', 0.0)*100:.2f}%"
     )
     return summary
 
 
 def run_ablation_study(
-    model: str = "phi3",
+    model: str = "groq-llama3-8b",
     embedding_name: str = DEFAULT_EMBEDDING,
     output: str = ABLATION_RESULTS_FILE,
 ) -> None:
@@ -950,7 +962,7 @@ def run_ablation_study(
     # STEP 3 — Build comparison rows
     col_headers = [
         f"{'Mode':<14}", f"{'TopicAcc':>8}", f"{'ModeAcc':>7}",
-        f"{'KwCov':>6}", f"{'Lat':>8}", f"{'AvgInTok':>8}",
+        f"{'KwCov':>6}", f"{'Lat':>8}", f"{'Hall':>7}", f"{'AvgInTok':>8}",
         f"{'AvgOutTok':>9}", f"{'AvgTotTok':>9}", f"{'AvgCost':>12}",
     ]
     table_rows: list[list[str]] = []
@@ -963,6 +975,7 @@ def run_ablation_study(
             f"{s['mode_accuracy']*100:>6.1f}%",
             f"{s['avg_keyword_coverage']:>6.3f}",
             f"{s['avg_latency_ms']:>6.0f}ms",
+            f"{s.get('avg_hallucination_rate', 0.0)*100:>6.1f}%",
             f"{t['avg_input_per_query']:>8.0f}",
             f"{t['avg_output_per_query']:>9.0f}",
             f"{t['avg_total_per_query']:>9.0f}",
@@ -1058,7 +1071,7 @@ def run_model_comparison(
     # STEP 3 — Build comparison rows
     col_headers = [
         f"{'Model':<16}", f"{'Type':<4}", f"{'TopicAcc':>8}", f"{'ModeAcc':>7}",
-        f"{'KwCov':>6}", f"{'Lat':>8}", f"{'AvgInTok':>8}",
+        f"{'KwCov':>6}", f"{'Lat':>8}", f"{'Hall':>7}", f"{'AvgInTok':>8}",
         f"{'AvgOutTok':>9}", f"{'AvgTotTok':>9}", f"{'AvgCost':>12}",
     ]
     table_rows: list[list[str]] = []
@@ -1073,6 +1086,7 @@ def run_model_comparison(
             f"{s['mode_accuracy']*100:>6.1f}%",
             f"{s['avg_keyword_coverage']:>6.3f}",
             f"{s['avg_latency_ms']:>6.0f}ms",
+            f"{s.get('avg_hallucination_rate', 0.0)*100:>6.1f}%",
             f"{t['avg_input_per_query']:>8.0f}",
             f"{t['avg_output_per_query']:>9.0f}",
             f"{t['avg_total_per_query']:>9.0f}",
@@ -1108,7 +1122,7 @@ def run_model_comparison(
 
 
 def run_embedding_comparison(
-    model: str = "phi3",
+    model: str = "groq-llama3-8b",
     retrieval_mode: str = "hybrid",
     output: str = EMBEDDING_COMPARISON_FILE,
 ) -> None:
@@ -1195,7 +1209,7 @@ def run_embedding_comparison(
     # STEP 3 — Build comparison rows
     col_headers = [
         f"{'Embedding':<20}", f"{'Dim':<5}", f"{'TopicAcc':>8}", f"{'ModeAcc':>7}",
-        f"{'KwCov':>6}", f"{'Lat':>8}", f"{'AvgInTok':>8}",
+        f"{'KwCov':>6}", f"{'Lat':>8}", f"{'Hall':>7}", f"{'AvgInTok':>8}",
         f"{'AvgOutTok':>9}", f"{'AvgTotTok':>9}", f"{'AvgCost':>12}",
     ]
     table_rows: list[list[str]] = []
@@ -1209,6 +1223,7 @@ def run_embedding_comparison(
             f"{s['mode_accuracy']*100:>6.1f}%",
             f"{s['avg_keyword_coverage']:>6.3f}",
             f"{s['avg_latency_ms']:>6.0f}ms",
+            f"{s.get('avg_hallucination_rate', 0.0)*100:>6.1f}%",
             f"{t['avg_input_per_query']:>8.0f}",
             f"{t['avg_output_per_query']:>9.0f}",
             f"{t['avg_total_per_query']:>9.0f}",
@@ -1352,6 +1367,7 @@ def run_full_matrix(
                     "mode_acc": summary["mode_accuracy"],
                     "kw_cov": summary["avg_keyword_coverage"],
                     "lat": summary["avg_latency_ms"],
+                    "hall": summary.get("avg_hallucination_rate", 0.0),
                     "avg_input_tokens": tok["avg_input_per_query"],
                     "avg_tokens": tok["avg_total_per_query"],
                     "avg_cost": tok["avg_cost_per_query"],
@@ -1365,7 +1381,7 @@ def run_full_matrix(
     # STEP 3 — Build full matrix table
     col_headers = [
         f"{'Model':<14}", f"{'Embedding':<20}", f"{'TopicAcc':>8}",
-        f"{'ModeAcc':>7}", f"{'KwCov':>6}", f"{'Lat':>8}",
+        f"{'ModeAcc':>7}", f"{'KwCov':>6}", f"{'Lat':>8}", f"{'Hall':>7}",
         f"{'AvgInTok':>8}", f"{'AvgTotTok':>9}", f"{'AvgCost':>12}",
     ]
     table_rows_out: list[list[str]] = []
@@ -1377,6 +1393,7 @@ def run_full_matrix(
             f"{row['mode_acc']*100:>6.1f}%",
             f"{row['kw_cov']:>6.3f}",
             f"{row['lat']:>6.0f}ms",
+            f"{row.get('hall', 0.0)*100:>6.1f}%",
             f"{row.get('avg_input_tokens', 0):>8.0f}",
             f"{row['avg_tokens']:>9.0f}",
             f"${row['avg_cost']:>11.6f}",
@@ -1612,7 +1629,7 @@ def run_slm_vs_llm_comparison(
     # Build row data for a group
     col_headers = [
         f"{'Model':<16}", f"{'TopicAcc':>8}", f"{'ModeAcc':>7}",
-        f"{'KwCov':>6}", f"{'Lat':>8}", f"{'AvgInTok':>8}",
+        f"{'KwCov':>6}", f"{'Lat':>8}", f"{'Hall':>7}", f"{'AvgInTok':>8}",
         f"{'AvgOutTok':>9}", f"{'AvgTotTok':>9}", f"{'AvgCost':>12}",
     ]
 
@@ -1627,6 +1644,7 @@ def run_slm_vs_llm_comparison(
                 f"{s['mode_accuracy']*100:>6.1f}%",
                 f"{s['avg_keyword_coverage']:>6.3f}",
                 f"{s['avg_latency_ms']:>6.0f}ms",
+                f"{s.get('avg_hallucination_rate', 0.0)*100:>6.1f}%",
                 f"{t['avg_input_per_query']:>8.0f}",
                 f"{t['avg_output_per_query']:>9.0f}",
                 f"{t['avg_total_per_query']:>9.0f}",
@@ -1722,8 +1740,8 @@ def _parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--model",
         choices=MODELS_TO_EVALUATE,
-        default="phi3",
-        help="Model to evaluate (default: phi3).",
+        default=MODELS_TO_EVALUATE[0] if MODELS_TO_EVALUATE else "groq-llama3-8b",
+        help="Model to evaluate (default: first Groq model).",
     )
     parser.add_argument(
         "--retrieval",

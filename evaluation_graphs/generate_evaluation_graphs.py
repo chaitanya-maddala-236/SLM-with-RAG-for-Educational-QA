@@ -27,6 +27,7 @@ from research_config import (
     MODEL_COMPARISON_FILE,
     SLM_VS_LLM_FILE,
     TOKEN_COMPARISON_FILE,
+    RESULTS_DIR,
 )
 
 # Lazy-initialized so `--help` works even when matplotlib is not installed.
@@ -65,7 +66,7 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="evaluation_graphs/output",
+        default=f"{RESULTS_DIR}/graphs",
         help="Directory where graphs will be saved.",
     )
     return parser.parse_args()
@@ -80,6 +81,18 @@ def _init_plotting_backend() -> bool:
         import matplotlib.pyplot as _plt
 
         plt = _plt
+        _plt.style.use("seaborn-v0_8-whitegrid")
+        _plt.rcParams.update(
+            {
+                "figure.dpi": 220,
+                "savefig.dpi": 300,
+                "axes.titlesize": 14,
+                "axes.labelsize": 12,
+                "xtick.labelsize": 10,
+                "ytick.labelsize": 10,
+                "legend.fontsize": 10,
+            }
+        )
         return True
     except ModuleNotFoundError:
         print(
@@ -177,6 +190,7 @@ def _get_column_indices(headers: list[str]) -> dict[str, int]:
         "avg_total": ("avgtotal", "avgtottok"),
         "avg_input": ("avginput", "avgintok"),
         "avg_output": ("avgoutput", "avgouttok"),
+        "hallucination": ("hall", "halluc", "hallucrate", "hallucinationrate"),
     }
 
     mapping["label"] = 0
@@ -258,6 +272,7 @@ def _build_graphs_for_table(
     total_tokens_vals: list[float] = []
     input_tokens_vals: list[float] = []
     output_tokens_vals: list[float] = []
+    hallucination_vals: list[float] = []
 
     def _row_value_or_nan(row_values: list[str], col_name: str) -> float:
         index = indices.get(col_name)
@@ -280,6 +295,7 @@ def _build_graphs_for_table(
         total_tokens_vals.append(_row_value_or_nan(row, "avg_total"))
         input_tokens_vals.append(_row_value_or_nan(row, "avg_input"))
         output_tokens_vals.append(_row_value_or_nan(row, "avg_output"))
+        hallucination_vals.append(_row_value_or_nan(row, "hallucination"))
 
     def _filter_valid_pairs(xs: list[str], ys: list[float]) -> tuple[list[str], list[float]]:
         valid: list[tuple[str, float]] = []
@@ -320,6 +336,36 @@ def _build_graphs_for_table(
         if latency_clean:
             p = output_dir / f"{prefix}_latency.png"
             _save_bar_chart(labels_clean, latency_clean, f"{base_name} - Latency", "Latency (ms)", p, color="#9BBB59")
+            created.append(p)
+
+    if "hallucination" in indices:
+        labels_clean, hall_clean = _filter_valid_pairs(labels, hallucination_vals)
+        if hall_clean:
+            p = output_dir / f"{prefix}_hallucination_rate.png"
+            _save_bar_chart(
+                labels_clean,
+                hall_clean,
+                f"{base_name} - Hallucination Rate",
+                "Hallucination Rate (%)",
+                p,
+                color="#C0504D",
+            )
+            created.append(p)
+
+    if "topic_acc" in indices and "latency" in indices:
+        lbl, lat_clean, acc_clean = _filter_valid_triples(labels, latency_vals, topic_vals)
+        if lat_clean and acc_clean:
+            p = output_dir / f"{prefix}_latency_vs_accuracy.png"
+            plt.figure(figsize=(8, 6))
+            plt.scatter(lat_clean, acc_clean, color="#4F81BD", s=80, alpha=0.9)
+            for i, name in enumerate(lbl):
+                plt.annotate(name, (lat_clean[i], acc_clean[i]), xytext=(4, 4), textcoords="offset points")
+            plt.xlabel("Latency (ms)")
+            plt.ylabel("Topic Accuracy (%)")
+            plt.title(f"{base_name} - Latency vs Accuracy")
+            plt.tight_layout()
+            plt.savefig(p, dpi=300)
+            plt.close()
             created.append(p)
 
     if "avg_cost" in indices:

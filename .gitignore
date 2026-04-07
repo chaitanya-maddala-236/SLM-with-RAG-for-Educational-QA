@@ -5,7 +5,6 @@ __pycache__/
 
 # Virtual environments
 venv/
-.env/
 .venv/
 ENV/
 env/
@@ -55,10 +54,6 @@ coverage.xml
 
 # VS Code
 .vscode/
-
-# Environment variables
-.env
-.env.*
 
 # Logs
 *.log

@@ -20,6 +20,7 @@ langchain-ollama>=0.1.0
 # Groq API LLMs (llama3-8b, llama3-70b, mixtral, gemma2 via Groq cloud)
 # Requires GROQ_API_KEY environment variable
 langchain-groq>=0.1.0
+python-dotenv>=1.0.1
 
 # Streamlit UI
 streamlit>=1.35.0
@@ -34,18 +35,13 @@ tiktoken>=0.7.0
 Pillow>=10.2.0
 faiss-cpu>=1.7.4
 pypdf>=4.0.0
+torch>=2.2.0
 
 # Utilities
 numpy>=1.26.0
 matplotlib>=3.8.4
 
-# ── Optional: API-hosted LLMs & embeddings ────────────────────────────────────
-# Uncomment the lines below (or pip install) to use the corresponding provider.
-# Each requires an environment variable to be set:
-#   OPENAI_API_KEY     → GPT-4.1, GPT-4o-mini, text-embedding-3-large
-#   ANTHROPIC_API_KEY  → Claude 3 Sonnet, Claude Haiku
-#   GOOGLE_API_KEY     → Gemini 1.5 Pro, Gemini 1.5 Flash
-
-# langchain-openai>=0.1.0       # GPT-4.1, GPT-4o-mini, text-embedding-3-large
-# langchain-anthropic>=0.1.0    # Claude 3 Sonnet, Claude Haiku
-# langchain-google-genai>=1.0.0 # Gemini 1.5 Pro, Gemini 1.5 Flash
+# Optional evaluation/observability extras
+# ragas>=0.1.0
+# datasets>=2.19.0
+# mlflow>=2.13.0

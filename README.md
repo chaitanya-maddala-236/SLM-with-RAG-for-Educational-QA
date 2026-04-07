@@ -1,8 +1,28 @@
 # 🎓 EduSLM-RAG — Educational Conversational QA with Contextual Retrieval
 
-> **Python 3.11+** | **LangChain** | **ChromaDB** | **Ollama** | **Streamlit** | **BGE / nomic / OpenAI Embeddings** | **BM25 + Dense + Semantic Search** | **Cross-Encoder Reranking**
+> **Python 3.11+** | **LangChain** | **ChromaDB** | **Groq API** | **Streamlit** | **BGE / nomic / OpenAI Embeddings** | **BM25 + Dense + Semantic Search** | **Cross-Encoder Reranking**
 
 A research-grade **Retrieval-Augmented Generation (RAG)** system for educational question answering using Small Language Models (SLMs) and API-hosted LLMs. It handles multi-turn conversations, resolves pronouns and ambiguous follow-ups, detects topic shifts, and falls back gracefully when a question is out of scope.
+
+> **Important (current setup):** the repository is configured for **Groq-only API model evaluation**. Set `GROQ_API_KEY` in `.env` before running app/evaluations.
+
+```bash
+GROQ_API_KEY=replace_with_your_groq_api_key
+```
+
+### ✅ Latest reliability/testing updates
+
+- Uploaded images are now captioned directly and injected into context, so visual queries still work even when no prebuilt image index exists.
+- Evaluation summaries now include **hallucination rate** (`1 - Faithfulness`) in addition to latency/accuracy.
+- Default evaluation outputs are written to `results/`:
+  - `results/research_results.txt`
+  - `results/ablation_results.txt`
+  - `results/model_comparison_results.txt`
+  - `results/embedding_comparison_results.txt`
+  - `results/full_matrix_results.txt`
+  - `results/token_comparison_results.txt`
+  - `results/slm_vs_llm_results.txt`
+- Graphs are generated in research format under `results/graphs/` with accuracy, latency, and hallucination-rate visuals.
 
 ---
 
@@ -168,37 +188,20 @@ Each document carries structured metadata used for retrieval filtering:
 
 All models are registered in `MODEL_REGISTRY` in `research_config.py`.
 
-### SLMs (free — run locally via Ollama)
+### Groq API models (active for evaluation)
 
-| Model Key | Model | Cost | Description |
+| Model Key | Provider | Input / 1K tokens | Output / 1K tokens |
 |---|---|---|---|
-| `tinyllama` | TinyLlama 1.1B | Free | Very fast, minimal RAM — ideal for edge testing |
-| `phi3` | Microsoft Phi-3 Mini | Free | Strong reasoning for its size; **default model** |
-| `gemma2` | Google Gemma2 2B | Free | Google's compact, efficient SLM |
-| `llama3.2` | Meta Llama 3.2 | Free | Compact multilingual model |
-| `mistral` | Mistral 7B | Free | Balanced quality / speed for local inference |
+| `groq-llama3-8b` | Groq | $0.00005 | $0.00008 |
+| `groq-llama3-70b` | Groq | $0.00059 | $0.00079 |
+| `groq-mixtral` | Groq | $0.00024 | $0.00024 |
+| `groq-gemma2` | Groq | $0.00020 | $0.00020 |
 
-### LLMs (API — Benchmark models)
-
-| Model Key | Model | Provider | Input / 1K tokens | Output / 1K tokens | Context |
-|---|---|---|---|---|---|
-| `gpt-4.1` | **GPT-4.1** | OpenAI | $0.002 | $0.008 | 1 M tokens |
-| `claude-3-sonnet` | **Claude 3.5 Sonnet** | Anthropic | $0.003 | $0.015 | 200 K tokens |
-| `gemini-1.5-pro` | **Gemini 1.5 Pro** | Google | $0.00125 | $0.005 | 2 M tokens |
-| `gpt-4o-mini` | GPT-4o Mini | OpenAI | $0.00015 | $0.0006 | 128 K tokens |
-| `claude-haiku` | Claude Haiku | Anthropic | $0.00025 | $0.00125 | 200 K tokens |
-| `gemini-flash` | Gemini 1.5 Flash | Google | $0.000075 | $0.0003 | 1 M tokens |
-
-> **Default model:** `phi3` (local, free)
+> **Default evaluation model:** `groq-llama3-8b`
 >
-> API LLMs require the corresponding environment variable:
-> - `OPENAI_API_KEY` — GPT-4.1, GPT-4o-mini
-> - `ANTHROPIC_API_KEY` — Claude 3 Sonnet, Claude Haiku
-> - `GOOGLE_API_KEY` — Gemini 1.5 Pro, Gemini 1.5 Flash
+> Required environment variable: `GROQ_API_KEY`
 >
-> The Streamlit sidebar lets you switch between SLM (local) and LLM (API) modes at runtime with a live API key status indicator.
-
-`MODELS_TO_EVALUATE` is dynamically derived — it selects all entries from `MODEL_REGISTRY` where `type == "SLM"`, so adding a new model to the registry automatically includes it in evaluations.
+> `MODELS_TO_EVALUATE` is Groq-only by default.
 
 ---
 
@@ -480,41 +483,23 @@ pip install langchain-anthropic
 pip install langchain-google-genai
 ```
 
-### Step 3 — Pull the default SLM
+### Step 3 — Configure Groq API key
 
 ```bash
-ollama pull phi3
+echo "GROQ_API_KEY=replace_with_your_groq_api_key" >> .env
 ```
 
-To also use other SLMs in multi-model mode:
-
-```bash
-ollama pull tinyllama
-ollama pull llama3.2
-ollama pull mistral
-ollama pull gemma2:2b
-```
-
-To use the `nomic-embed-text` embedding model locally:
+To use the `nomic-embed-text` embedding model locally (optional):
 
 ```bash
 ollama pull nomic-embed-text
 ```
 
-### Step 4 — (Optional) Set API keys for LLM benchmark models
+### Step 4 — Verify Groq key is loaded
 
 ```bash
-# OpenAI — GPT-4.1, GPT-4o-mini, text-embedding-3-large
-export OPENAI_API_KEY="sk-..."
-
-# Anthropic — Claude 3 Sonnet, Claude Haiku
-export ANTHROPIC_API_KEY="sk-ant-..."
-
-# Google — Gemini 1.5 Pro, Gemini 1.5 Flash
-export GOOGLE_API_KEY="AIza..."
+python -c "import os; print('GROQ_API_KEY set:', bool(os.environ.get('GROQ_API_KEY')))"
 ```
-
-The Streamlit UI shows a live ✅ / ⚠️ indicator next to each provider based on whether the key is set.
 
 ### Step 5 — Verify corpus stats
 
@@ -587,16 +572,16 @@ All experiments are run via `research_evaluator.py` with the `--mode` flag.
 
 ### Single Model Experiment
 
-Run one model across all retrieval modes (`vector_only`, `bm25_only`, `hybrid`) with the default embedding:
+Run one Groq model with the default embedding:
 
 ```bash
-python research_evaluator.py --mode single --model phi3
+python research_evaluator.py --mode single --model groq-llama3-8b
 ```
 
 With a different embedding:
 
 ```bash
-python research_evaluator.py --mode single --model phi3 --embedding bge-base
+python research_evaluator.py --mode single --model groq-llama3-8b --embedding bge-base
 ```
 
 ### Retrieval Ablation Study
@@ -604,12 +589,12 @@ python research_evaluator.py --mode single --model phi3 --embedding bge-base
 Run all retrieval modes for a single model and compare:
 
 ```bash
-python research_evaluator.py --mode ablation --model phi3
+python research_evaluator.py --mode ablation --model groq-llama3-8b
 ```
 
 ### Model Comparison
 
-Run all SLMs in `MODEL_REGISTRY` with the same retrieval mode and embedding:
+Run all Groq models in `MODEL_REGISTRY` with the same retrieval mode and embedding:
 
 ```bash
 python research_evaluator.py --mode model_comparison --retrieval hybrid
@@ -617,15 +602,15 @@ python research_evaluator.py --mode model_comparison --retrieval hybrid
 
 ### Embedding Comparison
 
-Run the same model across all 7 embedding models:
+Run the same Groq model across all embedding models:
 
 ```bash
-python research_evaluator.py --mode embedding_comparison --model phi3
+python research_evaluator.py --mode embedding_comparison --model groq-llama3-8b
 ```
 
 ### Full Matrix
 
-Run every SLM × every retrieval mode combination:
+Run every Groq model × every embedding combination:
 
 ```bash
 python research_evaluator.py --mode full_matrix
@@ -641,7 +626,7 @@ python research_evaluator.py --mode token_comparison
 
 ### SLM vs. LLM Comparison
 
-Compare local SLMs against OpenAI API models (requires `OPENAI_API_KEY`):
+Compare model groups based on registry type (with Groq models active):
 
 ```bash
 python research_evaluator.py --mode slm_vs_llm
@@ -658,10 +643,10 @@ python research_evaluator.py --mode full
 ### Custom Output File
 
 ```bash
-python research_evaluator.py --mode single --model mistral --output my_results.txt
+python research_evaluator.py --mode single --model groq-llama3-8b --output my_results.txt
 ```
 
-All results are written to `research_results.txt` (or the specified output path) in a structured plain-text format.
+All results are written to the `results/` folder by default (or to a custom `--output` path).
 
 ### Generate Evaluation Graphs
 
@@ -812,12 +797,13 @@ sentence-transformers>=3.0.0
 huggingface-hub>=0.23.0
 transformers>=4.40.0
 
-# Local LLM + local Ollama embeddings (nomic-embed-text, phi3, llama3.2, …)
+# Optional local embeddings via Ollama
 ollama>=0.2.0
 langchain-ollama>=0.1.0
 
 # Streamlit UI
 streamlit>=1.35.0
+python-dotenv>=1.0.1
 
 # Hybrid search — BM25 keyword retrieval (Sparse Embeddings)
 rank-bm25>=0.2.2
@@ -829,15 +815,13 @@ tiktoken>=0.7.0
 Pillow>=10.2.0
 faiss-cpu>=1.7.4
 pypdf>=4.0.0
+torch>=2.2.0
 
 # Utilities
 numpy>=1.26.0
 
-# ── Optional: API-hosted LLMs & embeddings ─────────────────────────────────
-# Uncomment or pip-install as needed:
-# langchain-openai>=0.1.0       # GPT-4.1, GPT-4o-mini, text-embedding-3-large
-# langchain-anthropic>=0.1.0    # Claude 3 Sonnet, Claude Haiku
-# langchain-google-genai>=1.0.0 # Gemini 1.5 Pro, Gemini 1.5 Flash
+# Groq API LLM
+langchain-groq>=0.1.0
 ```
 
 Install all core dependencies:

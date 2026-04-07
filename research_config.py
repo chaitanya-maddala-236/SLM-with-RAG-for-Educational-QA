@@ -14,10 +14,16 @@ Usage:
     )
 """
 
+try:
+    from dotenv import load_dotenv
+    load_dotenv()
+except ImportError:
+    pass
+
 # ── Model registry ───────────────────────────────────────────────────────────
 # List of model metadata dicts used for evaluation and cost tracking.
 # type="SLM"  → free / locally-hosted (Ollama) models
-# type="LLM"  → paid API-hosted models
+# type="LLM"  → Groq API-hosted models
 
 MODEL_REGISTRY = [
     {"name": "tinyllama", "type": "SLM", "provider": "ollama",
@@ -40,32 +46,6 @@ MODEL_REGISTRY = [
      "model_id": "mistral", "params_billions": 7.0,
      "context_window": 8192, "cost_per_1k_input_tokens": 0.0,
      "cost_per_1k_output_tokens": 0.0},
-    # ── API-hosted LLMs (Benchmark) ───────────────────────────────────────────
-    {"name": "gpt-4.1", "type": "LLM", "provider": "openai",
-     "model_id": "gpt-4.1", "params_billions": None,
-     "context_window": 1047576, "cost_per_1k_input_tokens": 0.002,
-     "cost_per_1k_output_tokens": 0.008},
-    {"name": "claude-3-sonnet", "type": "LLM", "provider": "anthropic",
-     "model_id": "claude-3-5-sonnet-20241022", "params_billions": None,
-     "context_window": 200000, "cost_per_1k_input_tokens": 0.003,
-     "cost_per_1k_output_tokens": 0.015},
-    {"name": "gemini-1.5-pro", "type": "LLM", "provider": "google",
-     "model_id": "gemini-1.5-pro", "params_billions": None,
-     "context_window": 2097152, "cost_per_1k_input_tokens": 0.00125,
-     "cost_per_1k_output_tokens": 0.005},
-    # ── Smaller API LLMs (kept for backward compatibility) ────────────────────
-    {"name": "gpt-4o-mini", "type": "LLM", "provider": "openai",
-     "model_id": "gpt-4o-mini", "params_billions": None,
-     "context_window": 128000, "cost_per_1k_input_tokens": 0.00015,
-     "cost_per_1k_output_tokens": 0.0006},
-    {"name": "claude-haiku", "type": "LLM", "provider": "anthropic",
-     "model_id": "claude-haiku-4-5-20251001", "params_billions": None,
-     "context_window": 200000, "cost_per_1k_input_tokens": 0.00025,
-     "cost_per_1k_output_tokens": 0.00125},
-    {"name": "gemini-flash", "type": "LLM", "provider": "google",
-     "model_id": "gemini-1.5-flash", "params_billions": None,
-     "context_window": 1000000, "cost_per_1k_input_tokens": 0.000075,
-     "cost_per_1k_output_tokens": 0.0003},
     # ── Groq API LLMs ─────────────────────────────────────────────────────────
     {"name": "groq-llama3-8b", "type": "LLM", "provider": "groq",
      "model_id": "llama3-8b-8192", "params_billions": 8.0,
@@ -93,20 +73,21 @@ GROQ_MODELS = [m["name"] for m in MODEL_REGISTRY if m.get("provider") == "groq"]
 
 # ── Experiment axes ──────────────────────────────────────────────────────────
 
-# MODELS_TO_EVALUATE includes both local SLMs and Groq LLMs for comparison.
+# MODELS_TO_EVALUATE is Groq-only for API-based research comparison.
 # Groq models require GROQ_API_KEY to be set in the environment.
-MODELS_TO_EVALUATE = SLM_MODELS + GROQ_MODELS
+MODELS_TO_EVALUATE = GROQ_MODELS
 RETRIEVAL_MODES = ["vector_only", "bm25_only", "hybrid"]
 
 # ── Per-comparison output files (one file per comparison type) ────────────────
-RESULTS_FILE = "research_results.txt"
-ABLATION_RESULTS_FILE = "ablation_results.txt"
-MODEL_COMPARISON_FILE = "model_comparison_results.txt"
-EMBEDDING_COMPARISON_FILE = "embedding_comparison_results.txt"
-FULL_MATRIX_FILE = "full_matrix_results.txt"
-TOKEN_COMPARISON_FILE = "token_comparison_results.txt"
-SLM_VS_LLM_FILE = "slm_vs_llm_results.txt"
-MULTIMODAL_RESULTS_FILE = "multimodal_results.txt"
+RESULTS_DIR = "results"
+RESULTS_FILE = f"{RESULTS_DIR}/research_results.txt"
+ABLATION_RESULTS_FILE = f"{RESULTS_DIR}/ablation_results.txt"
+MODEL_COMPARISON_FILE = f"{RESULTS_DIR}/model_comparison_results.txt"
+EMBEDDING_COMPARISON_FILE = f"{RESULTS_DIR}/embedding_comparison_results.txt"
+FULL_MATRIX_FILE = f"{RESULTS_DIR}/full_matrix_results.txt"
+TOKEN_COMPARISON_FILE = f"{RESULTS_DIR}/token_comparison_results.txt"
+SLM_VS_LLM_FILE = f"{RESULTS_DIR}/slm_vs_llm_results.txt"
+MULTIMODAL_RESULTS_FILE = f"{RESULTS_DIR}/multimodal_results.txt"
 
 # Embedding support: available embedding models for research evaluation
 EMBEDDING_MODELS = [
