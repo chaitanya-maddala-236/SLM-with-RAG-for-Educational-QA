@@ -65,7 +65,8 @@ except ImportError:
 
 # -- Cross-encoder reranker (optional) ----------------------------------------
 _CROSS_ENCODER_AVAILABLE = False
-_cross_encoder_model = None
+# Cache is a dict keyed by model_name to support multiple cross-encoder models.
+_cross_encoder_cache: dict = {}
 try:
     from sentence_transformers import CrossEncoder as _CrossEncoder  # type: ignore[import]
     _CROSS_ENCODER_AVAILABLE = True
@@ -305,8 +306,8 @@ def load_cross_encoder(model_name: str = _DEFAULT_CROSS_ENCODER):
     """
     Load (or return cached) a sentence-transformers CrossEncoder model.
 
-    The model is loaded once and cached in the module-level ``_cross_encoder_model``
-    variable to avoid repeated downloads across calls.
+    Models are cached per *model_name* so that requesting a different model
+    name after an initial load correctly returns the right encoder instance.
 
     Args:
         model_name: HuggingFace model ID for the cross-encoder.
@@ -314,19 +315,19 @@ def load_cross_encoder(model_name: str = _DEFAULT_CROSS_ENCODER):
     Returns:
         CrossEncoder instance, or None if sentence_transformers is not installed.
     """
-    global _cross_encoder_model
+    global _cross_encoder_cache
     if not _CROSS_ENCODER_AVAILABLE:
         print("  [CrossEncoder] sentence-transformers not installed; "
               "cross-encoder reranking unavailable.")
         return None
-    if _cross_encoder_model is None:
+    if model_name not in _cross_encoder_cache:
         print(f"  [CrossEncoder] Loading model: {model_name}")
         try:
-            _cross_encoder_model = _CrossEncoder(model_name)
+            _cross_encoder_cache[model_name] = _CrossEncoder(model_name)
         except Exception as exc:
             print(f"  [CrossEncoder] Load failed: {exc}")
             return None
-    return _cross_encoder_model
+    return _cross_encoder_cache[model_name]
 
 
 def cross_encoder_rerank(

@@ -257,21 +257,25 @@ class TestEmbeddings(unittest.TestCase):
         self.assertIn("text-embedding-3-large", names)
 
     def test_get_embeddings_returns_hf_model(self):
-        """get_embeddings('bge-small') should return a HuggingFaceEmbeddings object."""
+        """get_embeddings('bge-small') returns a HuggingFaceEmbeddings object (mocked)."""
         from embeddings import get_embeddings
         from langchain_community.embeddings import HuggingFaceEmbeddings
-        emb = get_embeddings("bge-small")
-        self.assertIsInstance(emb, HuggingFaceEmbeddings)
+        mock_hf = MagicMock(spec=HuggingFaceEmbeddings)
+        with patch("embeddings._load_huggingface_embeddings", return_value=mock_hf):
+            emb = get_embeddings("bge-small")
+        self.assertIs(emb, mock_hf)
 
     def test_get_embeddings_unknown_falls_back(self):
-        """get_embeddings with unknown name emits a warning and returns default."""
+        """get_embeddings with unknown name emits a warning and returns default (mocked)."""
         from embeddings import get_embeddings
         from langchain_community.embeddings import HuggingFaceEmbeddings
         import warnings
-        with warnings.catch_warnings(record=True) as w:
-            warnings.simplefilter("always")
-            emb = get_embeddings("completely-unknown-embedding-xyz")
-        self.assertIsInstance(emb, HuggingFaceEmbeddings)
+        mock_hf = MagicMock(spec=HuggingFaceEmbeddings)
+        with patch("embeddings._load_huggingface_embeddings", return_value=mock_hf):
+            with warnings.catch_warnings(record=True) as w:
+                warnings.simplefilter("always")
+                emb = get_embeddings("completely-unknown-embedding-xyz")
+        self.assertIs(emb, mock_hf)
         self.assertTrue(any("Unknown embedding" in str(warning.message) for warning in w))
 
     @unittest.skipUnless(
@@ -295,11 +299,13 @@ class TestEmbeddings(unittest.TestCase):
                 os.environ["OPENAI_API_KEY"] = original
 
     def test_get_bge_embeddings_alias(self):
-        """get_bge_embeddings() backward compat alias should still work."""
+        """get_bge_embeddings() backward compat alias should still work (mocked)."""
         from embeddings import get_bge_embeddings
         from langchain_community.embeddings import HuggingFaceEmbeddings
-        emb = get_bge_embeddings()
-        self.assertIsInstance(emb, HuggingFaceEmbeddings)
+        mock_hf = MagicMock(spec=HuggingFaceEmbeddings)
+        with patch("embeddings._load_huggingface_embeddings", return_value=mock_hf):
+            emb = get_bge_embeddings()
+        self.assertIs(emb, mock_hf)
 
 
 # ===========================================================================
@@ -388,7 +394,21 @@ class TestChunkSlidingWindow(unittest.TestCase):
 
 
 class TestChunkSemantic(unittest.TestCase):
-    """Tests for retriever.chunk_semantic (uses real bge-small embeddings)."""
+    """Tests for retriever.chunk_semantic (get_embeddings is mocked — no download)."""
+
+    def _make_mock_embed_fn(self, n_sentences: int = 4):
+        """Return a mock embedding function that produces distinct cosine-separable vectors."""
+        import math
+        # Produce orthogonal-ish unit vectors so similarity varies predictably
+        mock_fn = MagicMock()
+        def _embed(texts):
+            vecs = []
+            for i, _ in enumerate(texts):
+                angle = (i / max(len(texts), 1)) * math.pi
+                vecs.append([math.cos(angle), math.sin(angle)])
+            return vecs
+        mock_fn.embed_documents.side_effect = _embed
+        return mock_fn
 
     def setUp(self):
         from retriever import chunk_semantic
@@ -402,23 +422,27 @@ class TestChunkSemantic(unittest.TestCase):
         self.metas = [{"topic": "mixed", "grade": "7"}]
 
     def test_returns_list_of_documents(self):
-        docs = self.chunk_semantic(self.texts, self.metas, embedding_name="bge-small")
+        with patch("retriever.get_embeddings", return_value=self._make_mock_embed_fn()):
+            docs = self.chunk_semantic(self.texts, self.metas, embedding_name="bge-small")
         self.assertIsInstance(docs, list)
         self.assertGreater(len(docs), 0)
 
     def test_metadata_preserved(self):
-        docs = self.chunk_semantic(self.texts, self.metas, embedding_name="bge-small")
+        with patch("retriever.get_embeddings", return_value=self._make_mock_embed_fn()):
+            docs = self.chunk_semantic(self.texts, self.metas, embedding_name="bge-small")
         for d in docs:
             self.assertIn("topic", d.metadata)
 
     def test_single_sentence_is_kept(self):
-        docs = self.chunk_semantic(
-            ["Single sentence only."], [{"topic": "t"}], embedding_name="bge-small"
-        )
+        with patch("retriever.get_embeddings", return_value=self._make_mock_embed_fn()):
+            docs = self.chunk_semantic(
+                ["Single sentence only."], [{"topic": "t"}], embedding_name="bge-small"
+            )
         self.assertEqual(len(docs), 1)
 
     def test_empty_input(self):
-        docs = self.chunk_semantic([], [], embedding_name="bge-small")
+        with patch("retriever.get_embeddings", return_value=self._make_mock_embed_fn()):
+            docs = self.chunk_semantic([], [], embedding_name="bge-small")
         self.assertEqual(docs, [])
 
 
@@ -440,8 +464,14 @@ class TestGetChunks(unittest.TestCase):
         self.assertGreater(len(docs), 0)
 
     def test_semantic_strategy(self):
-        docs = self.get_chunks(self.texts, self.metas, strategy="semantic",
-                               embedding_name="bge-small")
+        import math
+        mock_fn = MagicMock()
+        def _embed(texts):
+            return [[math.cos(i), math.sin(i)] for i, _ in enumerate(texts)]
+        mock_fn.embed_documents.side_effect = _embed
+        with patch("retriever.get_embeddings", return_value=mock_fn):
+            docs = self.get_chunks(self.texts, self.metas, strategy="semantic",
+                                   embedding_name="bge-small")
         self.assertGreater(len(docs), 0)
 
     def test_unknown_strategy_defaults_to_fixed(self):

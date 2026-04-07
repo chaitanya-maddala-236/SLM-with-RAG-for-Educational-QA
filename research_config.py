@@ -82,36 +82,47 @@ RESULTS_FILE = "research_results.txt"
 # Embedding support: available embedding models for research evaluation
 EMBEDDING_MODELS = [
     {"name": "bge-small", "model_id": "BAAI/bge-small-en-v1.5",
-     "dimension": 384, "type": "huggingface"},
+     "dimension": 384, "type": "huggingface",
+     "description": "BGE Small — fast, default embedding"},
     # bge-base-en (requested benchmark model)
     {"name": "bge-base-en", "model_id": "BAAI/bge-base-en-v1.5",
-     "dimension": 768, "type": "huggingface"},
+     "dimension": 768, "type": "huggingface",
+     "description": "BGE Base EN — benchmark, balanced quality/speed"},
     # backward-compat alias
     {"name": "bge-base", "model_id": "BAAI/bge-base-en-v1.5",
-     "dimension": 768, "type": "huggingface"},
+     "dimension": 768, "type": "huggingface",
+     "description": "BGE Base (alias for bge-base-en)"},
     {"name": "bge-large", "model_id": "BAAI/bge-large-en-v1.5",
-     "dimension": 1024, "type": "huggingface"},
+     "dimension": 1024, "type": "huggingface",
+     "description": "BGE Large — highest retrieval quality"},
     # all-MiniLM-L6-v2 (requested benchmark model)
     {"name": "all-MiniLM-L6-v2",
      "model_id": "sentence-transformers/all-MiniLM-L6-v2",
-     "dimension": 384, "type": "huggingface"},
+     "dimension": 384, "type": "huggingface",
+     "description": "MiniLM L6-v2 — benchmark, very fast, lightweight"},
     # backward-compat alias
     {"name": "minilm",
      "model_id": "sentence-transformers/all-MiniLM-L6-v2",
-     "dimension": 384, "type": "huggingface"},
+     "dimension": 384, "type": "huggingface",
+     "description": "MiniLM (alias for all-MiniLM-L6-v2)"},
     {"name": "mpnet",
      "model_id": "sentence-transformers/all-mpnet-base-v2",
-     "dimension": 768, "type": "huggingface"},
+     "dimension": 768, "type": "huggingface",
+     "description": "MPNet Base — strong general-purpose embeddings"},
     {"name": "e5-small", "model_id": "intfloat/e5-small-v2",
-     "dimension": 384, "type": "huggingface"},
+     "dimension": 384, "type": "huggingface",
+     "description": "E5 Small — instruction-tuned, compact"},
     {"name": "e5-base", "model_id": "intfloat/e5-base-v2",
-     "dimension": 768, "type": "huggingface"},
+     "dimension": 768, "type": "huggingface",
+     "description": "E5 Base — instruction-tuned, larger"},
     # nomic-embed-text via Ollama (requested benchmark model)
     {"name": "nomic-embed-text", "model_id": "nomic-embed-text",
-     "dimension": 768, "type": "ollama"},
+     "dimension": 768, "type": "ollama",
+     "description": "Nomic Embed Text — benchmark, local via Ollama"},
     # text-embedding-3-large via OpenAI API (requested benchmark model)
     {"name": "text-embedding-3-large", "model_id": "text-embedding-3-large",
-     "dimension": 3072, "type": "openai"},
+     "dimension": 3072, "type": "openai",
+     "description": "OpenAI text-embedding-3-large — benchmark, requires OPENAI_API_KEY"},
 ]
 
 # Default embedding (current system)

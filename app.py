@@ -138,7 +138,7 @@ def init_session_state() -> None:
 
 # ── Sidebar: Controls only ────────────────────────────────────────────────────
 
-def render_controls() -> tuple[str, str, str, int, str, bool]:
+def render_controls() -> tuple[str, str, int, str, str, bool]:
     with st.sidebar:
         st.title("⚙️ Controls")
         if st.button("🗑️ Clear Conversation", use_container_width=True):

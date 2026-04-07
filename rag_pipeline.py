@@ -100,11 +100,10 @@ from retriever import (
     hierarchical_retrieve,
     retrieve_top_k,
     BM25Index,
-    cross_encoder_rerank,
 )
 from evaluation import compute_all_metrics
 from data_loader import get_texts_and_metadatas
-from research_config import MODEL_REGISTRY, DEFAULT_CHUNKING_STRATEGY
+from research_config import MODEL_REGISTRY
 
 # ── Multimodal extension (optional; degrades gracefully when deps are absent) ─
 try:
