@@ -662,6 +662,24 @@ python research_evaluator.py --mode single --model mistral --output my_results.t
 
 All results are written to `research_results.txt` (or the specified output path) in a structured plain-text format.
 
+### Generate Evaluation Graphs
+
+After running comparison experiments, generate PNG graphs from result files:
+
+```bash
+python evaluation_graphs/generate_evaluation_graphs.py
+```
+
+Custom input/output paths:
+
+```bash
+python evaluation_graphs/generate_evaluation_graphs.py \
+  --input model_comparison_results.txt token_comparison_results.txt \
+  --output-dir evaluation_graphs/output
+```
+
+Graphs are saved to `evaluation_graphs/output/`.
+
 ---
 
 ## 💬 Example Conversation Flows

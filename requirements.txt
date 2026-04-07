@@ -37,6 +37,7 @@ pypdf>=4.0.0
 
 # Utilities
 numpy>=1.26.0
+matplotlib>=3.8.4
 
 # ── Optional: API-hosted LLMs & embeddings ────────────────────────────────────
 # Uncomment the lines below (or pip install) to use the corresponding provider.
