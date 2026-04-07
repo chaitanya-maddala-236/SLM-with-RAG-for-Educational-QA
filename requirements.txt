@@ -6,18 +6,19 @@ langchain-core>=0.2.0
 # Vector store
 chromadb>=0.5.0
 
-# Embeddings (BGE via HuggingFace)
+# Embeddings (BGE / MiniLM / mpnet / E5 via HuggingFace — also used for cross-encoder)
 sentence-transformers>=3.0.0
 huggingface-hub>=0.23.0
 transformers>=4.40.0
 
-# Local LLM (Ollama integration)
+# Local LLM + local Ollama embeddings (nomic-embed-text, phi3, llama3.2, …)
 ollama>=0.2.0
+langchain-ollama>=0.1.0
 
 # Streamlit UI
 streamlit>=1.35.0
 
-# Hybrid search — BM25 keyword retrieval
+# Hybrid search — BM25 keyword retrieval (Sparse Embeddings)
 rank-bm25>=0.2.2
 
 # Token counting (Phi-3 compatible tokenizer approximation)
@@ -30,3 +31,14 @@ pypdf>=4.0.0
 
 # Utilities
 numpy>=1.26.0
+
+# ── Optional: API-hosted LLMs & embeddings ────────────────────────────────────
+# Uncomment the lines below (or pip install) to use the corresponding provider.
+# Each requires an environment variable to be set:
+#   OPENAI_API_KEY     → GPT-4.1, GPT-4o-mini, text-embedding-3-large
+#   ANTHROPIC_API_KEY  → Claude 3 Sonnet, Claude Haiku
+#   GOOGLE_API_KEY     → Gemini 1.5 Pro, Gemini 1.5 Flash
+
+# langchain-openai>=0.1.0       # GPT-4.1, GPT-4o-mini, text-embedding-3-large
+# langchain-anthropic>=0.1.0    # Claude 3 Sonnet, Claude Haiku
+# langchain-google-genai>=1.0.0 # Gemini 1.5 Pro, Gemini 1.5 Flash
