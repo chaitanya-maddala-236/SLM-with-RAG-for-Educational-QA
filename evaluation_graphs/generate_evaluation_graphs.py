@@ -12,20 +12,34 @@ from __future__ import annotations
 import argparse
 import math
 import re
-from types import ModuleType
+import sys
 from pathlib import Path
+from types import ModuleType
+
+REPO_ROOT = Path(__file__).resolve().parents[1]
+if str(REPO_ROOT) not in sys.path:
+    sys.path.insert(0, str(REPO_ROOT))
+
+from research_config import (
+    ABLATION_RESULTS_FILE,
+    EMBEDDING_COMPARISON_FILE,
+    FULL_MATRIX_FILE,
+    MODEL_COMPARISON_FILE,
+    SLM_VS_LLM_FILE,
+    TOKEN_COMPARISON_FILE,
+)
 
 # Lazy-initialized so `--help` works even when matplotlib is not installed.
 plt: ModuleType | None = None
 
 
 DEFAULT_INPUT_FILES = [
-    "ablation_results.txt",
-    "model_comparison_results.txt",
-    "embedding_comparison_results.txt",
-    "full_matrix_results.txt",
-    "token_comparison_results.txt",
-    "slm_vs_llm_results.txt",
+    ABLATION_RESULTS_FILE,
+    MODEL_COMPARISON_FILE,
+    EMBEDDING_COMPARISON_FILE,
+    FULL_MATRIX_FILE,
+    TOKEN_COMPARISON_FILE,
+    SLM_VS_LLM_FILE,
 ]
 
 TABLE_HEADER_MARKERS = (

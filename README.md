@@ -21,7 +21,7 @@ A research-grade **Retrieval-Augmented Generation (RAG)** system for educational
 11. [Setup & Installation](#-setup--installation)
 12. [How to Run](#-how-to-run)
 13. [Evaluation Commands](#-evaluation-commands)
-14. [Generate Evaluation Graphs](#-generate-evaluation-graphs)
+14. [Generate Evaluation Graphs](#generate-evaluation-graphs)
 15. [Example Conversation Flows](#-example-conversation-flows)
 16. [Research Overview](#-research-overview)
 17. [Requirements](#-requirements)
