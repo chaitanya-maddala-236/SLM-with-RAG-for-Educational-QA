@@ -21,9 +21,10 @@ A research-grade **Retrieval-Augmented Generation (RAG)** system for educational
 11. [Setup & Installation](#-setup--installation)
 12. [How to Run](#-how-to-run)
 13. [Evaluation Commands](#-evaluation-commands)
-14. [Example Conversation Flows](#-example-conversation-flows)
-15. [Research Overview](#-research-overview)
-16. [Requirements](#-requirements)
+14. [Generate Evaluation Graphs](#generate-evaluation-graphs)
+15. [Example Conversation Flows](#-example-conversation-flows)
+16. [Research Overview](#-research-overview)
+17. [Requirements](#-requirements)
 
 ---
 
@@ -661,6 +662,30 @@ python research_evaluator.py --mode single --model mistral --output my_results.t
 ```
 
 All results are written to `research_results.txt` (or the specified output path) in a structured plain-text format.
+
+### Generate Evaluation Graphs
+
+After running comparison experiments, generate PNG graphs from result files:
+
+```bash
+python evaluation_graphs/generate_evaluation_graphs.py
+```
+
+Ensure dependencies are installed:
+
+```bash
+pip install -r requirements.txt
+```
+
+Custom input/output paths:
+
+```bash
+python evaluation_graphs/generate_evaluation_graphs.py \
+  --input model_comparison_results.txt token_comparison_results.txt \
+  --output-dir evaluation_graphs/output
+```
+
+Graphs are saved to `evaluation_graphs/output/`.
 
 ---
 
