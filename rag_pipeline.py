@@ -40,6 +40,28 @@ from langchain_ollama import OllamaLLM
 from langchain_core.prompts import PromptTemplate
 from langchain_community.vectorstores import Chroma
 
+# ── API LLM availability flags ────────────────────────────────────────────────
+_OPENAI_AVAILABLE = False
+try:
+    from langchain_openai import ChatOpenAI as _ChatOpenAI  # type: ignore[import]
+    _OPENAI_AVAILABLE = True
+except ImportError:
+    pass
+
+_ANTHROPIC_AVAILABLE = False
+try:
+    from langchain_anthropic import ChatAnthropic as _ChatAnthropic  # type: ignore[import]
+    _ANTHROPIC_AVAILABLE = True
+except ImportError:
+    pass
+
+_GOOGLE_AVAILABLE = False
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI as _ChatGoogleAI  # type: ignore[import]
+    _GOOGLE_AVAILABLE = True
+except ImportError:
+    pass
+
 # ── Token counting (tiktoken with graceful fallback) ──────────────────────────
 try:
     import tiktoken as _tiktoken
@@ -81,6 +103,7 @@ from retriever import (
 )
 from evaluation import compute_all_metrics
 from data_loader import get_texts_and_metadatas
+from research_config import MODEL_REGISTRY
 
 # ── Multimodal extension (optional; degrades gracefully when deps are absent) ─
 try:
@@ -490,6 +513,86 @@ class PipelineResult:
         print(entry)
 
 
+# ── LLM factory: supports Ollama SLMs and OpenAI/Anthropic/Google API LLMs ───
+
+def _build_llm(model_name: str, temperature: float = 0.1):
+    """
+    Return a LangChain LLM / ChatModel for the given *model_name*.
+
+    Looks up the model in MODEL_REGISTRY to determine the provider:
+      - ``ollama``    → OllamaLLM (local, no API key needed)
+      - ``openai``    → ChatOpenAI  (requires OPENAI_API_KEY)
+      - ``anthropic`` → ChatAnthropic (requires ANTHROPIC_API_KEY)
+      - ``google``    → ChatGoogleGenerativeAI (requires GOOGLE_API_KEY)
+
+    Falls back to OllamaLLM for any unknown provider.
+
+    Args:
+        model_name:  Name as listed in MODEL_REGISTRY (e.g. "gpt-4.1").
+        temperature: Sampling temperature passed to the model.
+
+    Returns:
+        A LangChain Runnable that can be invoked with a prompt string.
+
+    Raises:
+        ImportError:  If the required langchain_* package is not installed.
+        ValueError:   If the required API key env var is not set.
+    """
+    import os as _os
+
+    cfg = next((m for m in MODEL_REGISTRY if m["name"] == model_name), None)
+    provider = cfg["provider"] if cfg else "ollama"
+    model_id = cfg["model_id"] if cfg else model_name
+
+    if provider == "openai":
+        if not _OPENAI_AVAILABLE:
+            raise ImportError(
+                "langchain-openai is not installed. "
+                "Run: pip install langchain-openai"
+            )
+        api_key = _os.environ.get("OPENAI_API_KEY", "")
+        if not api_key:
+            raise ValueError("OPENAI_API_KEY environment variable is not set.")
+        return _ChatOpenAI(
+            model=model_id,
+            temperature=temperature,
+            api_key=api_key,
+        )
+
+    if provider == "anthropic":
+        if not _ANTHROPIC_AVAILABLE:
+            raise ImportError(
+                "langchain-anthropic is not installed. "
+                "Run: pip install langchain-anthropic"
+            )
+        api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
+        if not api_key:
+            raise ValueError("ANTHROPIC_API_KEY environment variable is not set.")
+        return _ChatAnthropic(
+            model=model_id,
+            temperature=temperature,
+            api_key=api_key,
+        )
+
+    if provider == "google":
+        if not _GOOGLE_AVAILABLE:
+            raise ImportError(
+                "langchain-google-genai is not installed. "
+                "Run: pip install langchain-google-genai"
+            )
+        api_key = _os.environ.get("GOOGLE_API_KEY", "")
+        if not api_key:
+            raise ValueError("GOOGLE_API_KEY environment variable is not set.")
+        return _ChatGoogleAI(
+            model=model_id,
+            temperature=temperature,
+            google_api_key=api_key,
+        )
+
+    # Default: Ollama (local)
+    return OllamaLLM(model=model_id, temperature=temperature)
+
+
 class RAGPipeline:
     """
     Full conversational Contextual Retrieval RAG pipeline.
@@ -505,12 +608,21 @@ class RAGPipeline:
         top_k: int = TOP_K,
         retrieval_mode: str = "hybrid",
         image_index: "_ImageFAISSIndex | None" = None,
+        use_cross_encoder: bool = False,
     ) -> None:
         self.vector_store = vector_store
         self.top_k = top_k
         self.model_name = model_name  # Bugfix: store for MLflow logging
         self.retrieval_mode = retrieval_mode
-        self.llm = OllamaLLM(model=model_name, temperature=0.1)
+        self.use_cross_encoder = use_cross_encoder
+        # Build the LLM: API models (GPT-4.1, Claude, Gemini) or local Ollama
+        try:
+            self.llm = _build_llm(model_name, temperature=0.1)
+            print(f"[Init] LLM loaded: {model_name}")
+        except Exception as exc:
+            print(f"[Init] LLM load failed for '{model_name}': {exc}. "
+                  "Falling back to phi3 via Ollama.")
+            self.llm = OllamaLLM(model="phi3", temperature=0.1)
         self._ctx_builder = ContextualQueryBuilder()
         # Embedding function reused for context-similarity checks
         self._embed_fn = vector_store._embedding_function
@@ -984,6 +1096,7 @@ class RAGPipeline:
                 query=retrieval_query,
                 topic=final_topic,
                 k=self.top_k,
+                use_cross_encoder=self.use_cross_encoder,
             )
         result.log(7, f"Retrieved {len(retrieved)} document(s) after reranking.")
 

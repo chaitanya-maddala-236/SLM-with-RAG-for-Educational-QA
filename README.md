@@ -1,8 +1,8 @@
 # 🎓 EduSLM-RAG — Educational Conversational QA with Contextual Retrieval
 
-> **Python 3.11+** | **LangChain** | **ChromaDB** | **Ollama** | **Streamlit** | **BGE Embeddings** | **BM25 Hybrid Search**
+> **Python 3.11+** | **LangChain** | **ChromaDB** | **Ollama** | **Streamlit** | **BGE / nomic / OpenAI Embeddings** | **BM25 + Dense + Semantic Search** | **Cross-Encoder Reranking**
 
-A research-grade **Retrieval-Augmented Generation (RAG)** system for educational question answering using Small Language Models (SLMs). It handles multi-turn conversations, resolves pronouns and ambiguous follow-ups, detects topic shifts, and falls back gracefully when a question is out of scope.
+A research-grade **Retrieval-Augmented Generation (RAG)** system for educational question answering using Small Language Models (SLMs) and API-hosted LLMs. It handles multi-turn conversations, resolves pronouns and ambiguous follow-ups, detects topic shifts, and falls back gracefully when a question is out of scope.
 
 ---
 
@@ -13,16 +13,17 @@ A research-grade **Retrieval-Augmented Generation (RAG)** system for educational
 3. [Corpus Statistics](#-corpus-statistics)
 4. [Models](#-models)
 5. [Embedding Models](#-embedding-models)
-6. [RAG Improvements](#-rag-improvements)
-7. [Bonus Features](#-bonus-features)
-8. [Tech Stack](#️-tech-stack)
-9. [Project Structure](#-project-structure)
-10. [Setup & Installation](#-setup--installation)
-11. [How to Run](#-how-to-run)
-12. [Evaluation Commands](#-evaluation-commands)
-13. [Example Conversation Flows](#-example-conversation-flows)
-14. [Research Overview](#-research-overview)
-15. [Requirements](#-requirements)
+6. [Embedding Techniques & Chunking Strategies](#-embedding-techniques--chunking-strategies)
+7. [RAG Improvements](#-rag-improvements)
+8. [Bonus Features](#-bonus-features)
+9. [Tech Stack](#️-tech-stack)
+10. [Project Structure](#-project-structure)
+11. [Setup & Installation](#-setup--installation)
+12. [How to Run](#-how-to-run)
+13. [Evaluation Commands](#-evaluation-commands)
+14. [Example Conversation Flows](#-example-conversation-flows)
+15. [Research Overview](#-research-overview)
+16. [Requirements](#-requirements)
 
 ---
 
@@ -172,36 +173,110 @@ All models are registered in `MODEL_REGISTRY` in `research_config.py`.
 |---|---|---|---|
 | `tinyllama` | TinyLlama 1.1B | Free | Very fast, minimal RAM — ideal for edge testing |
 | `phi3` | Microsoft Phi-3 Mini | Free | Strong reasoning for its size; **default model** |
+| `gemma2` | Google Gemma2 2B | Free | Google's compact, efficient SLM |
 | `llama3.2` | Meta Llama 3.2 | Free | Compact multilingual model |
 | `mistral` | Mistral 7B | Free | Balanced quality / speed for local inference |
 
-### LLMs (paid — OpenAI API)
+### LLMs (API — Benchmark models)
 
-| Model Key | Model | Input Cost / 1K tokens | Output Cost / 1K tokens | Description |
-|---|---|---|---|---|
-| `gpt-3.5-turbo` | OpenAI GPT-3.5 Turbo | $0.0005 | $0.0015 | Fast, cost-effective API model |
-| `gpt-4o-mini` | OpenAI GPT-4o Mini | $0.00015 | $0.0006 | Strong capability at low cost |
+| Model Key | Model | Provider | Input / 1K tokens | Output / 1K tokens | Context |
+|---|---|---|---|---|---|
+| `gpt-4.1` | **GPT-4.1** | OpenAI | $0.002 | $0.008 | 1 M tokens |
+| `claude-3-sonnet` | **Claude 3.5 Sonnet** | Anthropic | $0.003 | $0.015 | 200 K tokens |
+| `gemini-1.5-pro` | **Gemini 1.5 Pro** | Google | $0.00125 | $0.005 | 2 M tokens |
+| `gpt-4o-mini` | GPT-4o Mini | OpenAI | $0.00015 | $0.0006 | 128 K tokens |
+| `claude-haiku` | Claude Haiku | Anthropic | $0.00025 | $0.00125 | 200 K tokens |
+| `gemini-flash` | Gemini 1.5 Flash | Google | $0.000075 | $0.0003 | 1 M tokens |
 
-> **Default model:** `phi3`  
-> All SLMs run free via [Ollama](https://ollama.com/). LLMs require an `OPENAI_API_KEY` environment variable.
+> **Default model:** `phi3` (local, free)
+>
+> API LLMs require the corresponding environment variable:
+> - `OPENAI_API_KEY` — GPT-4.1, GPT-4o-mini
+> - `ANTHROPIC_API_KEY` — Claude 3 Sonnet, Claude Haiku
+> - `GOOGLE_API_KEY` — Gemini 1.5 Pro, Gemini 1.5 Flash
+>
+> The Streamlit sidebar lets you switch between SLM (local) and LLM (API) modes at runtime with a live API key status indicator.
 
-`MODELS_TO_EVALUATE` is dynamically derived — it selects all entries from `MODEL_REGISTRY` where `type == "slm"`, so adding a new model to the registry automatically includes it in evaluations.
+`MODELS_TO_EVALUATE` is dynamically derived — it selects all entries from `MODEL_REGISTRY` where `type == "SLM"`, so adding a new model to the registry automatically includes it in evaluations.
 
 ---
 
 ## 🔢 Embedding Models
 
-All embeddings are defined in `EMBEDDING_MODELS` in `research_config.py`. Each embedding gets its own isolated ChromaDB collection and persist directory to avoid dimension-mismatch errors.
+All embeddings are defined in `EMBEDDING_MODELS` in `research_config.py`. Each embedding/chunking-strategy pair gets its own isolated ChromaDB collection and persist directory to avoid dimension-mismatch errors.
 
-| Key | Model ID | Dimensions | Description |
-|---|---|---|---|
-| `bge-small` ⭐ | `BAAI/bge-small-en-v1.5` | 384 | BGE Small — fast, **current default** |
-| `bge-base` | `BAAI/bge-base-en-v1.5` | 768 | BGE Base — balanced quality/speed |
-| `bge-large` | `BAAI/bge-large-en-v1.5` | 1024 | BGE Large — highest retrieval quality |
-| `minilm` | `sentence-transformers/all-MiniLM-L6-v2` | 384 | MiniLM — very fast, lightweight |
-| `mpnet` | `sentence-transformers/all-mpnet-base-v2` | 768 | MPNet — strong general purpose |
-| `e5-small` | `intfloat/e5-small-v2` | 384 | E5 Small — instruction-tuned |
-| `e5-base` | `intfloat/e5-base-v2` | 768 | E5 Base — instruction-tuned, larger |
+### Dense Embedding Models
+
+| Key | Model ID | Dimensions | Backend | Description |
+|---|---|---|---|---|
+| `bge-small` ⭐ | `BAAI/bge-small-en-v1.5` | 384 | HuggingFace | BGE Small — fast, **current default** |
+| `bge-base-en` | `BAAI/bge-base-en-v1.5` | 768 | HuggingFace | **Benchmark model** — balanced quality/speed |
+| `bge-large` | `BAAI/bge-large-en-v1.5` | 1024 | HuggingFace | BGE Large — highest retrieval quality |
+| `all-MiniLM-L6-v2` | `sentence-transformers/all-MiniLM-L6-v2` | 384 | HuggingFace | **Benchmark model** — very fast, lightweight |
+| `mpnet` | `sentence-transformers/all-mpnet-base-v2` | 768 | HuggingFace | Strong general-purpose embeddings |
+| `e5-small` | `intfloat/e5-small-v2` | 384 | HuggingFace | E5 Small — instruction-tuned |
+| `e5-base` | `intfloat/e5-base-v2` | 768 | HuggingFace | E5 Base — instruction-tuned, larger |
+| `nomic-embed-text` | `nomic-embed-text` | 768 | Ollama | **Benchmark model** — high quality, local |
+| `text-embedding-3-large` | `text-embedding-3-large` | 3072 | OpenAI API | **Benchmark model** — state-of-the-art |
+
+> `nomic-embed-text` requires: `ollama pull nomic-embed-text`  
+> `text-embedding-3-large` requires: `OPENAI_API_KEY`
+
+### Sparse Embeddings (BM25)
+
+BM25 keyword retrieval is built into the pipeline via `rank-bm25`.  
+Select retrieval mode `bm25_only` to use BM25 exclusively, or `hybrid` to merge BM25 scores with dense vector scores.
+
+### Hybrid Search (Dense + Sparse)
+
+With retrieval mode `hybrid` (the default), the pipeline:
+1. Retrieves top candidates via BM25 (sparse keyword matching)
+2. Retrieves top candidates via ChromaDB vector search (dense embeddings)
+3. Merges both result sets with a weighted score: `combined = (1-α)×BM25 + α×vector`
+4. Reranks the merged pool with MMR or cross-encoder (see below)
+
+---
+
+## 🧩 Embedding Techniques & Chunking Strategies
+
+### Chunking Strategies
+
+Chunking strategy is selected per vector store build. Each `(embedding, strategy)` pair uses its own isolated ChromaDB directory.
+
+| Strategy | Description | Config |
+|---|---|---|
+| `fixed` ⭐ | RecursiveCharacterTextSplitter, 400-char chunks, 50-char overlap — **default** | `CHUNK_SIZE=400`, `CHUNK_OVERLAP=50` |
+| `sliding_window` | Overlapping sliding windows: 400-char window, 200-char step (50 % overlap) | `SLIDING_WINDOW_SIZE=400`, `SLIDING_WINDOW_STEP=200` |
+| `semantic` | Sentence-level cosine-similarity grouping — splits when similarity drops below threshold | `SEMANTIC_SIMILARITY_THRESHOLD=0.75` |
+
+Select strategy in the Streamlit sidebar under **Chunking Strategy**, or via code:
+
+```python
+from retriever import build_vector_store
+store = build_vector_store(
+    persist=True,
+    embedding_name="bge-base-en",
+    chunking_strategy="sliding_window",   # or "fixed" / "semantic"
+)
+```
+
+### Cross-Encoder Re-ranking
+
+After initial retrieval, candidates can be re-ranked using a neural **cross-encoder** model (`cross-encoder/ms-marco-MiniLM-L-6-v2`) that jointly encodes each (query, document) pair for a more accurate relevance score.
+
+- **Enable in UI:** Toggle "🔁 Cross-Encoder Reranking" in the Streamlit sidebar
+- **Enable in code:** pass `use_cross_encoder=True` to `RAGPipeline` or `hybrid_search()`
+- **Fallback:** if `sentence-transformers` is not installed or the model fails, MMR reranking is used automatically
+
+```python
+from rag_pipeline import RAGPipeline
+pipeline = RAGPipeline(
+    vector_store=store,
+    model_name="gpt-4.1",
+    retrieval_mode="hybrid",
+    use_cross_encoder=True,
+)
+```
 
 > Switch embedding with: `python research_evaluator.py --mode single --embedding bge-large`
 
@@ -376,7 +451,7 @@ EduSLM-RAG/                                  (~30,720 total lines of Python)
 
 - Python 3.11+
 - [Ollama](https://ollama.com/) installed and running
-- (Optional) OpenAI API key for LLM comparison experiments
+- (Optional) API keys for GPT-4.1 / Claude 3 Sonnet / Gemini 1.5 Pro
 
 ### Step 1 — Clone the repository
 
@@ -391,6 +466,19 @@ cd SLM-with-RAG-for-Educational-QA
 pip install -r requirements.txt
 ```
 
+**Optional: API LLM / OpenAI embedding support**
+
+```bash
+# For GPT-4.1, GPT-4o-mini, or text-embedding-3-large
+pip install langchain-openai
+
+# For Claude 3 Sonnet, Claude Haiku
+pip install langchain-anthropic
+
+# For Gemini 1.5 Pro, Gemini 1.5 Flash
+pip install langchain-google-genai
+```
+
 ### Step 3 — Pull the default SLM
 
 ```bash
@@ -403,15 +491,29 @@ To also use other SLMs in multi-model mode:
 ollama pull tinyllama
 ollama pull llama3.2
 ollama pull mistral
+ollama pull gemma2:2b
 ```
 
-### Step 4 — (Optional) Set your OpenAI API key
-
-Only required if you want to run `gpt-3.5-turbo` or `gpt-4o-mini` in evaluation experiments:
+To use the `nomic-embed-text` embedding model locally:
 
 ```bash
-export OPENAI_API_KEY="sk-..."
+ollama pull nomic-embed-text
 ```
+
+### Step 4 — (Optional) Set API keys for LLM benchmark models
+
+```bash
+# OpenAI — GPT-4.1, GPT-4o-mini, text-embedding-3-large
+export OPENAI_API_KEY="sk-..."
+
+# Anthropic — Claude 3 Sonnet, Claude Haiku
+export ANTHROPIC_API_KEY="sk-ant-..."
+
+# Google — Gemini 1.5 Pro, Gemini 1.5 Flash
+export GOOGLE_API_KEY="AIza..."
+```
+
+The Streamlit UI shows a live ✅ / ⚠️ indicator next to each provider based on whether the key is set.
 
 ### Step 5 — Verify corpus stats
 
@@ -458,6 +560,23 @@ python -c "from data_loader import get_corpus_stats; import json; print(json.dum
 ```bash
 python research_evaluator.py --list-embeddings
 ```
+
+### Run the Test Suite
+
+```bash
+# Run all unit tests (no API keys required for core tests)
+python test.py
+
+# Verbose output
+python test.py -v
+
+# With pytest (if installed)
+pytest test.py -v
+```
+
+Tests are divided into 15 classes covering: `research_config`, `embeddings`, chunking strategies (`chunk_fixed`, `chunk_sliding_window`, `chunk_semantic`, `get_chunks`), `BM25Index`, `mmr_rerank`, `cross_encoder_rerank`, `build_vector_store` (mocked), `hybrid_search` (mocked), `hierarchical_retrieve` (mocked), `retrieve_top_k` (mocked), `_build_llm` factory, `RAGPipeline.__init__` (mocked), `compute_all_metrics`, and the benchmark runner in `test_queries.py`.
+
+Tests that require API keys (OpenAI / Anthropic / Google) are automatically **skipped** when the corresponding environment variable is not set.
 
 ---
 
@@ -663,31 +782,51 @@ langchain-core>=0.2.0
 # Vector store
 chromadb>=0.5.0
 
-# Embeddings (BGE via HuggingFace)
+# Embeddings (BGE / MiniLM / mpnet / E5 — also used for cross-encoder)
 sentence-transformers>=3.0.0
 huggingface-hub>=0.23.0
 transformers>=4.40.0
 
-# Local LLM (Ollama integration)
+# Local LLM + local Ollama embeddings (nomic-embed-text, phi3, llama3.2, …)
 ollama>=0.2.0
+langchain-ollama>=0.1.0
 
 # Streamlit UI
 streamlit>=1.35.0
 
-# Hybrid search — BM25 keyword retrieval
+# Hybrid search — BM25 keyword retrieval (Sparse Embeddings)
 rank-bm25>=0.2.2
 
-# Token counting (Phi-3 compatible tokenizer approximation)
+# Token counting
 tiktoken>=0.7.0
+
+# Multimodal extension
+Pillow>=10.2.0
+faiss-cpu>=1.7.4
+pypdf>=4.0.0
 
 # Utilities
 numpy>=1.26.0
+
+# ── Optional: API-hosted LLMs & embeddings ─────────────────────────────────
+# Uncomment or pip-install as needed:
+# langchain-openai>=0.1.0       # GPT-4.1, GPT-4o-mini, text-embedding-3-large
+# langchain-anthropic>=0.1.0    # Claude 3 Sonnet, Claude Haiku
+# langchain-google-genai>=1.0.0 # Gemini 1.5 Pro, Gemini 1.5 Flash
 ```
 
-Install all dependencies:
+Install all core dependencies:
 
 ```bash
 pip install -r requirements.txt
+```
+
+Install optional API provider packages as needed:
+
+```bash
+pip install langchain-openai      # OpenAI
+pip install langchain-anthropic   # Anthropic
+pip install langchain-google-genai # Google
 ```
 
 ---

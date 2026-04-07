@@ -40,6 +40,20 @@ MODEL_REGISTRY = [
      "model_id": "mistral", "params_billions": 7.0,
      "context_window": 8192, "cost_per_1k_input_tokens": 0.0,
      "cost_per_1k_output_tokens": 0.0},
+    # ── API-hosted LLMs (Benchmark) ───────────────────────────────────────────
+    {"name": "gpt-4.1", "type": "LLM", "provider": "openai",
+     "model_id": "gpt-4.1", "params_billions": None,
+     "context_window": 1047576, "cost_per_1k_input_tokens": 0.002,
+     "cost_per_1k_output_tokens": 0.008},
+    {"name": "claude-3-sonnet", "type": "LLM", "provider": "anthropic",
+     "model_id": "claude-3-5-sonnet-20241022", "params_billions": None,
+     "context_window": 200000, "cost_per_1k_input_tokens": 0.003,
+     "cost_per_1k_output_tokens": 0.015},
+    {"name": "gemini-1.5-pro", "type": "LLM", "provider": "google",
+     "model_id": "gemini-1.5-pro", "params_billions": None,
+     "context_window": 2097152, "cost_per_1k_input_tokens": 0.00125,
+     "cost_per_1k_output_tokens": 0.005},
+    # ── Smaller API LLMs (kept for backward compatibility) ────────────────────
     {"name": "gpt-4o-mini", "type": "LLM", "provider": "openai",
      "model_id": "gpt-4o-mini", "params_billions": None,
      "context_window": 128000, "cost_per_1k_input_tokens": 0.00015,
@@ -68,21 +82,47 @@ RESULTS_FILE = "research_results.txt"
 # Embedding support: available embedding models for research evaluation
 EMBEDDING_MODELS = [
     {"name": "bge-small", "model_id": "BAAI/bge-small-en-v1.5",
-     "dimension": 384, "type": "general"},
+     "dimension": 384, "type": "huggingface",
+     "description": "BGE Small — fast, default embedding"},
+    # bge-base-en (requested benchmark model)
+    {"name": "bge-base-en", "model_id": "BAAI/bge-base-en-v1.5",
+     "dimension": 768, "type": "huggingface",
+     "description": "BGE Base EN — benchmark, balanced quality/speed"},
+    # backward-compat alias
     {"name": "bge-base", "model_id": "BAAI/bge-base-en-v1.5",
-     "dimension": 768, "type": "general"},
+     "dimension": 768, "type": "huggingface",
+     "description": "BGE Base (alias for bge-base-en)"},
     {"name": "bge-large", "model_id": "BAAI/bge-large-en-v1.5",
-     "dimension": 1024, "type": "general"},
+     "dimension": 1024, "type": "huggingface",
+     "description": "BGE Large — highest retrieval quality"},
+    # all-MiniLM-L6-v2 (requested benchmark model)
+    {"name": "all-MiniLM-L6-v2",
+     "model_id": "sentence-transformers/all-MiniLM-L6-v2",
+     "dimension": 384, "type": "huggingface",
+     "description": "MiniLM L6-v2 — benchmark, very fast, lightweight"},
+    # backward-compat alias
     {"name": "minilm",
      "model_id": "sentence-transformers/all-MiniLM-L6-v2",
-     "dimension": 384, "type": "general"},
+     "dimension": 384, "type": "huggingface",
+     "description": "MiniLM (alias for all-MiniLM-L6-v2)"},
     {"name": "mpnet",
      "model_id": "sentence-transformers/all-mpnet-base-v2",
-     "dimension": 768, "type": "general"},
+     "dimension": 768, "type": "huggingface",
+     "description": "MPNet Base — strong general-purpose embeddings"},
     {"name": "e5-small", "model_id": "intfloat/e5-small-v2",
-     "dimension": 384, "type": "instruction"},
+     "dimension": 384, "type": "huggingface",
+     "description": "E5 Small — instruction-tuned, compact"},
     {"name": "e5-base", "model_id": "intfloat/e5-base-v2",
-     "dimension": 768, "type": "instruction"},
+     "dimension": 768, "type": "huggingface",
+     "description": "E5 Base — instruction-tuned, larger"},
+    # nomic-embed-text via Ollama (requested benchmark model)
+    {"name": "nomic-embed-text", "model_id": "nomic-embed-text",
+     "dimension": 768, "type": "ollama",
+     "description": "Nomic Embed Text — benchmark, local via Ollama"},
+    # text-embedding-3-large via OpenAI API (requested benchmark model)
+    {"name": "text-embedding-3-large", "model_id": "text-embedding-3-large",
+     "dimension": 3072, "type": "openai",
+     "description": "OpenAI text-embedding-3-large — benchmark, requires OPENAI_API_KEY"},
 ]
 
 # Default embedding (current system)
@@ -92,6 +132,22 @@ DEFAULT_EMBEDDING = "bge-small"
 # Each embedding gets its own collection to avoid dimension mismatch
 CHROMA_DIR_TEMPLATE = "./chroma_db_{embedding_name}"
 COLLECTION_NAME_TEMPLATE = "educational_rag_{embedding_name}"
+
+# ── Chunking / Embedding Techniques ──────────────────────────────────────────
+# Supported chunking strategies for build_vector_store:
+#   "fixed"           – RecursiveCharacterTextSplitter (default, existing behaviour)
+#   "sliding_window"  – Sliding-window chunking with configurable window/step
+#   "semantic"        – Sentence-group semantic chunking (cosine-similarity based)
+CHUNKING_STRATEGIES = ["fixed", "sliding_window", "semantic"]
+DEFAULT_CHUNKING_STRATEGY = "fixed"
+
+# Sliding-window chunking parameters
+SLIDING_WINDOW_SIZE = 400      # characters per window
+SLIDING_WINDOW_STEP = 200      # step between windows (50 % overlap)
+
+# Semantic chunking parameters
+SEMANTIC_CHUNK_MIN_SIZE = 100   # minimum chars to keep a semantic chunk
+SEMANTIC_SIMILARITY_THRESHOLD = 0.75  # cosine sim threshold to split
 
 # ── Structured test-query suite ──────────────────────────────────────────────
 #
