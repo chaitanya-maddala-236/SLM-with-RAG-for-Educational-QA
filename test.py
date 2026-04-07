@@ -401,13 +401,11 @@ class TestChunkSemantic(unittest.TestCase):
         import math
         # Produce orthogonal-ish unit vectors so similarity varies predictably
         mock_fn = MagicMock()
-        def _embed(texts):
-            vecs = []
-            for i, _ in enumerate(texts):
-                angle = (i / max(len(texts), 1)) * math.pi
-                vecs.append([math.cos(angle), math.sin(angle)])
-            return vecs
-        mock_fn.embed_documents.side_effect = _embed
+        mock_fn.embed_documents.side_effect = lambda texts: [
+            [math.cos((i / max(len(texts), 1)) * math.pi),
+             math.sin((i / max(len(texts), 1)) * math.pi)]
+            for i, _ in enumerate(texts)
+        ]
         return mock_fn
 
     def setUp(self):
@@ -466,9 +464,9 @@ class TestGetChunks(unittest.TestCase):
     def test_semantic_strategy(self):
         import math
         mock_fn = MagicMock()
-        def _embed(texts):
-            return [[math.cos(i), math.sin(i)] for i, _ in enumerate(texts)]
-        mock_fn.embed_documents.side_effect = _embed
+        mock_fn.embed_documents.side_effect = lambda texts: [
+            [math.cos(i), math.sin(i)] for i, _ in enumerate(texts)
+        ]
         with patch("retriever.get_embeddings", return_value=mock_fn):
             docs = self.get_chunks(self.texts, self.metas, strategy="semantic",
                                    embedding_name="bge-small")
