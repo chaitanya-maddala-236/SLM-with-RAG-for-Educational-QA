@@ -10,6 +10,7 @@ Usage examples:
 from __future__ import annotations
 
 import argparse
+import math
 import re
 from pathlib import Path
 
@@ -27,6 +28,16 @@ DEFAULT_INPUT_FILES = [
     "token_comparison_results.txt",
     "slm_vs_llm_results.txt",
 ]
+
+TABLE_HEADER_MARKERS = (
+    "TopicAcc",
+    "ModeAcc",
+    "AvgCost",
+    "AvgTotal",
+    "AvgTotTok",
+    "AvgInput",
+    "AvgInTok",
+)
 
 
 def _parse_args() -> argparse.Namespace:
@@ -94,7 +105,7 @@ def _extract_tables(text: str) -> list[tuple[list[str], list[list[str]]]]:
         if len(cells) < 2:
             continue
 
-        if any(h in line for h in ("TopicAcc", "ModeAcc", "AvgCost", "AvgTotal", "AvgTotTok", "AvgInput", "AvgInTok")):
+        if any(marker in line for marker in TABLE_HEADER_MARKERS):
             if current_header and current_rows:
                 tables.append((current_header, current_rows))
                 current_rows = []
@@ -220,8 +231,8 @@ def _build_graphs_for_table(
         input_tokens_vals.append(_to_number(row[indices["avg_input"]]) if "avg_input" in indices else float("nan"))
         output_tokens_vals.append(_to_number(row[indices["avg_output"]]) if "avg_output" in indices else float("nan"))
 
-    def _clean(vals: list[float]) -> list[float]:
-        return [v for v in vals if v == v]
+    def _filter_nan_values(vals: list[float]) -> list[float]:
+        return [v for v in vals if not math.isnan(v)]
 
     created: list[Path] = []
     prefix = f"{base_name}_table_{table_index}"
@@ -232,29 +243,29 @@ def _build_graphs_for_table(
         created.append(p)
 
     if "latency" in indices:
-        clean = _clean(latency_vals)
+        clean = _filter_nan_values(latency_vals)
         if clean:
             p = output_dir / f"{prefix}_latency.png"
             _save_bar_chart(labels, latency_vals, f"{base_name} - Latency", "Latency (ms)", p, color="#9BBB59")
             created.append(p)
 
     if "avg_cost" in indices:
-        clean = _clean(cost_vals)
+        clean = _filter_nan_values(cost_vals)
         if clean:
             p = output_dir / f"{prefix}_cost.png"
             _save_bar_chart(labels, cost_vals, f"{base_name} - Avg Cost", "Cost (USD/query)", p, color="#8064A2")
             created.append(p)
 
     if "avg_total" in indices:
-        clean = _clean(total_tokens_vals)
+        clean = _filter_nan_values(total_tokens_vals)
         if clean:
             p = output_dir / f"{prefix}_avg_total_tokens.png"
             _save_bar_chart(labels, total_tokens_vals, f"{base_name} - Avg Total Tokens", "Tokens/query", p, color="#F79646")
             created.append(p)
 
     if "avg_input" in indices and "avg_output" in indices:
-        clean_in = _clean(input_tokens_vals)
-        clean_out = _clean(output_tokens_vals)
+        clean_in = _filter_nan_values(input_tokens_vals)
+        clean_out = _filter_nan_values(output_tokens_vals)
         if clean_in and clean_out:
             x = list(range(len(labels)))
             width = 0.38
