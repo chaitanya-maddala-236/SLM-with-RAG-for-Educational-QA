@@ -84,6 +84,11 @@ def _to_number(value: str) -> float | None:
         return None
 
 
+def _to_number_or_nan(value: str) -> float:
+    parsed = _to_number(value)
+    return parsed if parsed is not None else float("nan")
+
+
 def _extract_tables(text: str) -> list[tuple[list[str], list[list[str]]]]:
     tables: list[tuple[list[str], list[list[str]]]] = []
     current_header: list[str] | None = None
@@ -223,16 +228,39 @@ def _build_graphs_for_table(
             continue
         labels.append(label)
 
-        topic_vals.append(_to_number(row[indices["topic_acc"]]) if "topic_acc" in indices else float("nan"))
-        mode_vals.append(_to_number(row[indices["mode_acc"]]) if "mode_acc" in indices else float("nan"))
-        latency_vals.append(_to_number(row[indices["latency"]]) if "latency" in indices else float("nan"))
-        cost_vals.append(_to_number(row[indices["avg_cost"]]) if "avg_cost" in indices else float("nan"))
-        total_tokens_vals.append(_to_number(row[indices["avg_total"]]) if "avg_total" in indices else float("nan"))
-        input_tokens_vals.append(_to_number(row[indices["avg_input"]]) if "avg_input" in indices else float("nan"))
-        output_tokens_vals.append(_to_number(row[indices["avg_output"]]) if "avg_output" in indices else float("nan"))
+        topic_vals.append(_to_number_or_nan(row[indices["topic_acc"]]) if "topic_acc" in indices else float("nan"))
+        mode_vals.append(_to_number_or_nan(row[indices["mode_acc"]]) if "mode_acc" in indices else float("nan"))
+        latency_vals.append(_to_number_or_nan(row[indices["latency"]]) if "latency" in indices else float("nan"))
+        cost_vals.append(_to_number_or_nan(row[indices["avg_cost"]]) if "avg_cost" in indices else float("nan"))
+        total_tokens_vals.append(_to_number_or_nan(row[indices["avg_total"]]) if "avg_total" in indices else float("nan"))
+        input_tokens_vals.append(_to_number_or_nan(row[indices["avg_input"]]) if "avg_input" in indices else float("nan"))
+        output_tokens_vals.append(_to_number_or_nan(row[indices["avg_output"]]) if "avg_output" in indices else float("nan"))
 
-    def _filter_nan_values(vals: list[float]) -> list[float]:
-        return [v for v in vals if not math.isnan(v)]
+    def _filter_valid_pairs(xs: list[str], ys: list[float]) -> tuple[list[str], list[float]]:
+        valid: list[tuple[str, float]] = []
+        for x, y in zip(xs, ys):
+            if y is None or math.isnan(y):
+                continue
+            valid.append((x, y))
+        if not valid:
+            return [], []
+        x_out, y_out = zip(*valid)
+        return list(x_out), list(y_out)
+
+    def _filter_valid_triples(
+        xs: list[str], ys1: list[float], ys2: list[float]
+    ) -> tuple[list[str], list[float], list[float]]:
+        valid: list[tuple[str, float, float]] = []
+        for x, y1, y2 in zip(xs, ys1, ys2):
+            if y1 is None or y2 is None:
+                continue
+            if math.isnan(y1) or math.isnan(y2):
+                continue
+            valid.append((x, y1, y2))
+        if not valid:
+            return [], [], []
+        x_out, y1_out, y2_out = zip(*valid)
+        return list(x_out), list(y1_out), list(y2_out)
 
     created: list[Path] = []
     prefix = f"{base_name}_table_{table_index}"
@@ -243,39 +271,38 @@ def _build_graphs_for_table(
         created.append(p)
 
     if "latency" in indices:
-        clean = _filter_nan_values(latency_vals)
-        if clean:
+        labels_clean, latency_clean = _filter_valid_pairs(labels, latency_vals)
+        if latency_clean:
             p = output_dir / f"{prefix}_latency.png"
-            _save_bar_chart(labels, latency_vals, f"{base_name} - Latency", "Latency (ms)", p, color="#9BBB59")
+            _save_bar_chart(labels_clean, latency_clean, f"{base_name} - Latency", "Latency (ms)", p, color="#9BBB59")
             created.append(p)
 
     if "avg_cost" in indices:
-        clean = _filter_nan_values(cost_vals)
-        if clean:
+        labels_clean, cost_clean = _filter_valid_pairs(labels, cost_vals)
+        if cost_clean:
             p = output_dir / f"{prefix}_cost.png"
-            _save_bar_chart(labels, cost_vals, f"{base_name} - Avg Cost", "Cost (USD/query)", p, color="#8064A2")
+            _save_bar_chart(labels_clean, cost_clean, f"{base_name} - Avg Cost", "Cost (USD/query)", p, color="#8064A2")
             created.append(p)
 
     if "avg_total" in indices:
-        clean = _filter_nan_values(total_tokens_vals)
-        if clean:
+        labels_clean, total_clean = _filter_valid_pairs(labels, total_tokens_vals)
+        if total_clean:
             p = output_dir / f"{prefix}_avg_total_tokens.png"
-            _save_bar_chart(labels, total_tokens_vals, f"{base_name} - Avg Total Tokens", "Tokens/query", p, color="#F79646")
+            _save_bar_chart(labels_clean, total_clean, f"{base_name} - Avg Total Tokens", "Tokens/query", p, color="#F79646")
             created.append(p)
 
     if "avg_input" in indices and "avg_output" in indices:
-        clean_in = _filter_nan_values(input_tokens_vals)
-        clean_out = _filter_nan_values(output_tokens_vals)
+        labels_clean, clean_in, clean_out = _filter_valid_triples(labels, input_tokens_vals, output_tokens_vals)
         if clean_in and clean_out:
-            x = list(range(len(labels)))
+            x = list(range(len(labels_clean)))
             width = 0.38
             left = [i - width / 2 for i in x]
             right = [i + width / 2 for i in x]
             p = output_dir / f"{prefix}_input_output_tokens.png"
-            plt.figure(figsize=(max(8, len(labels) * 0.9), 5))
-            plt.bar(left, input_tokens_vals, width=width, label="Avg Input Tokens", color="#4BACC6")
-            plt.bar(right, output_tokens_vals, width=width, label="Avg Output Tokens", color="#C0504D")
-            plt.xticks(x, labels, rotation=30, ha="right")
+            plt.figure(figsize=(max(8, len(labels_clean) * 0.9), 5))
+            plt.bar(left, clean_in, width=width, label="Avg Input Tokens", color="#4BACC6")
+            plt.bar(right, clean_out, width=width, label="Avg Output Tokens", color="#C0504D")
+            plt.xticks(x, labels_clean, rotation=30, ha="right")
             plt.ylabel("Tokens/query")
             plt.title(f"{base_name} - Avg Input vs Output Tokens")
             plt.legend()
