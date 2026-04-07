@@ -55,7 +55,7 @@ def _load_ollama_embeddings(model_id: str):
         ImportError: if langchain_community is not installed.
         ConnectionError: if Ollama server is unreachable.
     """
-    from langchain_community.embeddings import OllamaEmbeddings  # type: ignore[import]
+    from langchain_community.embeddings import OllamaEmbeddings
     return OllamaEmbeddings(model=model_id)
 
 

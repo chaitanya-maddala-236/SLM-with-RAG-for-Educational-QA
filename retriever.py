@@ -370,7 +370,7 @@ def cross_encoder_rerank(
         print(f"  [CrossEncoder] Prediction failed: {exc}. Falling back to MMR.")
         return mmr_rerank(query, candidates, top_k=top_k, topic_filter=topic_filter)
 
-    ranked = sorted(zip(scores, candidates), key=lambda x: x[0], reverse=True)
+    ranked = sorted(zip(scores, candidates), key=lambda score_doc: score_doc[0], reverse=True)
     return [doc for _, doc in ranked[:top_k]]
 
 
