@@ -106,6 +106,7 @@ EMBEDDING_COMPARISON_FILE = "embedding_comparison_results.txt"
 FULL_MATRIX_FILE = "full_matrix_results.txt"
 TOKEN_COMPARISON_FILE = "token_comparison_results.txt"
 SLM_VS_LLM_FILE = "slm_vs_llm_results.txt"
+MULTIMODAL_RESULTS_FILE = "multimodal_results.txt"
 
 # Embedding support: available embedding models for research evaluation
 EMBEDDING_MODELS = [
