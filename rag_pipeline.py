@@ -531,11 +531,13 @@ def _build_llm(model_name: str, temperature: float = 0.1):
       - ``openai``    → ChatOpenAI  (requires OPENAI_API_KEY)
       - ``anthropic`` → ChatAnthropic (requires ANTHROPIC_API_KEY)
       - ``google``    → ChatGoogleGenerativeAI (requires GOOGLE_API_KEY)
+      - ``groq``      → ChatGroq (requires GROQ_API_KEY)
 
     Falls back to OllamaLLM for any unknown provider.
 
     Args:
-        model_name:  Name as listed in MODEL_REGISTRY (e.g. "gpt-4.1").
+        model_name:  Name as listed in MODEL_REGISTRY (e.g. "gpt-4.1",
+                     "groq-llama3-8b").
         temperature: Sampling temperature passed to the model.
 
     Returns:

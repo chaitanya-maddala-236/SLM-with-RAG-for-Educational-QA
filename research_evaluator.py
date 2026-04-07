@@ -43,6 +43,7 @@ from datetime import datetime
 from dataclasses import dataclass, field
 from pathlib import Path
 
+import research_config as _rc
 from research_config import (
     MODELS_TO_EVALUATE,
     RETRIEVAL_MODES,
@@ -63,30 +64,36 @@ from context_memory import ConversationMemory
 from topic_memory_manager import TopicMemoryManager
 
 
-# ── Model registry (cost rates in USD per 1 000 tokens) ──────────────────────
+# ── Model config helpers ──────────────────────────────────────────────────────
 #
-# Allowed hardcoded values: model type labels and cost rate constants.
-# All numeric values in comparison tables must be derived from real results.
-
-MODEL_REGISTRY: dict[str, dict] = {
-    # Local SLMs run via Ollama — zero API cost
-    "tinyllama":    {"type": "SLM", "input_cost_per_1k": 0.0,      "output_cost_per_1k": 0.0},
-    "phi3":         {"type": "SLM", "input_cost_per_1k": 0.0,      "output_cost_per_1k": 0.0},
-    "gemma2":       {"type": "SLM", "input_cost_per_1k": 0.0,      "output_cost_per_1k": 0.0},
-    "llama3.2":     {"type": "SLM", "input_cost_per_1k": 0.0,      "output_cost_per_1k": 0.0},
-    "mistral":      {"type": "SLM", "input_cost_per_1k": 0.0,      "output_cost_per_1k": 0.0},
-    # Cloud LLMs — API cost rates in USD per 1 000 tokens
-    "gpt-4o-mini":  {"type": "LLM", "input_cost_per_1k": 0.00015,  "output_cost_per_1k": 0.0006},
-    "claude-haiku": {"type": "LLM", "input_cost_per_1k": 0.00025,  "output_cost_per_1k": 0.00125},
-    "gemini-flash": {"type": "LLM", "input_cost_per_1k": 0.000075, "output_cost_per_1k": 0.0003},
-}
+# All model metadata (type, provider, cost rates) is sourced from
+# research_config.MODEL_REGISTRY so that Groq and any future providers are
+# automatically included without duplicating data here.
+#
+# get_model_config() returns a normalised dict that maps the research_config
+# key names (cost_per_1k_input_tokens / cost_per_1k_output_tokens) to the
+# shorter names used by existing callers in this module
+# (input_cost_per_1k / output_cost_per_1k).
 
 MIN_ACCURACY: float = 0.0  # Threshold constant — not a table value
 
 
 def get_model_config(model: str) -> dict | None:
-    """Return the MODEL_REGISTRY entry for *model*, or None if not found."""
-    return MODEL_REGISTRY.get(model)
+    """Return metadata for *model* sourced from research_config.MODEL_REGISTRY.
+
+    Returns a dict with keys: type, provider, input_cost_per_1k,
+    output_cost_per_1k (and any other fields present in the registry).
+    Returns None if the model is not found.
+    """
+    entry = _rc.get_model_config(model)
+    if entry is None:
+        return None
+    # Expose cost fields under the short aliases expected by callers here.
+    return {
+        **entry,
+        "input_cost_per_1k":  entry.get("cost_per_1k_input_tokens",  0.0),
+        "output_cost_per_1k": entry.get("cost_per_1k_output_tokens", 0.0),
+    }
 
 
 # ── QueryResult dataclass ─────────────────────────────────────────────────────
@@ -815,11 +822,13 @@ class ResultsWriter:
         """
         with open(self.filepath, "a", encoding="utf-8") as f:
             self._section(f, title)
-            self._write_line(f, "  " + " | ".join(headers))
-            self._write_line(f, "  " + "-" * 80)
+            header_line = "  " + " | ".join(headers)
+            divider_width = max(len(header_line), 80)
+            self._write_line(f, header_line)
+            self._write_line(f, "  " + "-" * divider_width)
             for row in rows:
                 self._write_line(f, "  " + " | ".join(row))
-            self._write_line(f, "  " + "=" * 80)
+            self._write_line(f, "  " + "=" * divider_width)
             if footer_lines:
                 for line in footer_lines:
                     self._write_line(f, f"  {line}")
