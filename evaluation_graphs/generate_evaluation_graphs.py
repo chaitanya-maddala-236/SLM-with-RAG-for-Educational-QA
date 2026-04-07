@@ -13,9 +13,10 @@ import argparse
 import math
 import re
 from pathlib import Path
+from typing import Any
 
 # Lazy-initialized so `--help` works even when matplotlib is not installed.
-plt = None
+plt: Any | None = None
 
 
 DEFAULT_INPUT_FILES = [
@@ -68,8 +69,8 @@ def _init_plotting_backend() -> bool:
         return True
     except ModuleNotFoundError:
         print(
-            "Missing dependency: matplotlib. "
-            "Install dependencies with `pip install -r requirements.txt`."
+            "matplotlib not found. "
+            "Please ensure dependencies are installed: `pip install -r requirements.txt`."
         )
         return False
 

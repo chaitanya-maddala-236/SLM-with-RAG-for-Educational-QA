@@ -671,7 +671,7 @@ After running comparison experiments, generate PNG graphs from result files:
 python evaluation_graphs/generate_evaluation_graphs.py
 ```
 
-If you see a matplotlib error, install dependencies first:
+Ensure dependencies are installed:
 
 ```bash
 pip install -r requirements.txt
