@@ -1414,8 +1414,7 @@ def run_full_matrix(
         print(f"  {line}")
     print(f"{'═' * 80}")
 
-    # Write comparison table to file
-    writer = ResultsWriter(filepath=output)
+    # Write comparison table to file (reuse the writer already created above)
     writer.write_comparison_table(
         title=f"FULL MATRIX  retrieval={retrieval_mode}",
         headers=col_headers,
@@ -1763,54 +1762,29 @@ def main() -> None:
     model = args.model
     retrieval = args.retrieval
     embedding = args.embedding
-    output = args.output  # None → each function uses its own default file
+    # When --output is omitted, each comparison function uses its own default file.
+    # _out is passed as **kwargs so that None output is simply not forwarded.
+    _out: dict = {} if args.output is None else {"output": args.output}
 
     # Route to the appropriate function by mode
     if mode == "single":
         run_single_model_experiment(
-            model=model,
-            retrieval_mode=retrieval,
-            embedding_name=embedding,
-            **({} if output is None else {"output": output}),
+            model=model, retrieval_mode=retrieval, embedding_name=embedding, **_out
         )
     elif mode == "ablation":
-        run_ablation_study(
-            model=model,
-            embedding_name=embedding,
-            **({} if output is None else {"output": output}),
-        )
+        run_ablation_study(model=model, embedding_name=embedding, **_out)
     elif mode == "model_comparison":
-        run_model_comparison(
-            retrieval_mode=retrieval,
-            embedding_name=embedding,
-            **({} if output is None else {"output": output}),
-        )
+        run_model_comparison(retrieval_mode=retrieval, embedding_name=embedding, **_out)
     elif mode == "embedding_comparison":
-        run_embedding_comparison(
-            model=model,
-            retrieval_mode=retrieval,
-            **({} if output is None else {"output": output}),
-        )
+        run_embedding_comparison(model=model, retrieval_mode=retrieval, **_out)
     elif mode == "full_matrix":
-        run_full_matrix(
-            retrieval_mode=retrieval,
-            **({} if output is None else {"output": output}),
-        )
+        run_full_matrix(retrieval_mode=retrieval, **_out)
     elif mode == "token_comparison":
-        run_token_comparison(
-            retrieval_mode=retrieval,
-            embedding_name=embedding,
-            **({} if output is None else {"output": output}),
-        )
+        run_token_comparison(retrieval_mode=retrieval, embedding_name=embedding, **_out)
     elif mode == "slm_vs_llm":
-        run_slm_vs_llm_comparison(
-            retrieval_mode=retrieval,
-            embedding_name=embedding,
-            **({} if output is None else {"output": output}),
-        )
+        run_slm_vs_llm_comparison(retrieval_mode=retrieval, embedding_name=embedding, **_out)
     elif mode == "full":
-        # "full" mode: each comparison writes to its own default file unless overridden
-        _out = {} if output is None else {"output": output}
+        # Each comparison writes to its own default file unless --output is given.
         run_ablation_study(model, embedding, **_out)
         run_model_comparison(retrieval, embedding, **_out)
         run_embedding_comparison(model, retrieval, **_out)
