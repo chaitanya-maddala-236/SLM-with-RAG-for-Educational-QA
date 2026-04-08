@@ -113,6 +113,20 @@ DEFAULT_META_PATH = "image_meta.json"
 # Embedding dimension for openai/clip-vit-base-patch32
 CLIP_DIM = 512
 
+# ── API key validation helper ─────────────────────────────────────────────────
+
+_PLACEHOLDER_MARKERS = ("replace_with", "your_", "example", "placeholder")
+
+
+def _is_api_key_placeholder(key: str) -> bool:
+    """Return True if *key* looks like an unfilled placeholder value.
+
+    Centralises the placeholder check used by both ``VisionImageAnalyzer``
+    and ``vision_llm_available()`` so the marker list stays in one place.
+    """
+    lower = key.lower()
+    return any(marker in lower for marker in _PLACEHOLDER_MARKERS)
+
 
 # ── Data class ────────────────────────────────────────────────────────────────
 
@@ -291,14 +305,11 @@ class VisionImageAnalyzer:
     # ── Initialisation helpers ────────────────────────────────────────────────
 
     def _try_init_groq(self) -> None:
-        """Check whether a valid GROQ_API_KEY is present for the vision model."""
+        """Check whether a non-placeholder GROQ_API_KEY is set."""
         if not _GROQ_AVAILABLE:
             return
         api_key = os.environ.get("GROQ_API_KEY", "").strip()
-        if not api_key:
-            return
-        lower = api_key.lower()
-        if any(marker in lower for marker in ("replace_with", "your_", "example", "placeholder")):
+        if not api_key or _is_api_key_placeholder(api_key):
             return
         self._groq_api_key = api_key
         self._groq_ready = True
@@ -367,6 +378,16 @@ class VisionImageAnalyzer:
         return self._groq_ready or (self._ollama_model is not None) or self._blip_ready
 
     @property
+    def is_vision_llm(self) -> bool:
+        """Return True when a real vision LLM (Groq or Ollama LLaVA) is active.
+
+        Distinguishes the true vision-LLM path from the BLIP-only fallback so
+        callers can decide which prompt template to use without inspecting the
+        ``method`` string.
+        """
+        return self._groq_ready or (self._ollama_model is not None)
+
+    @property
     def method(self) -> str:
         """Return a short description of the active vision backend."""
         if self._groq_ready:
@@ -384,7 +405,16 @@ class VisionImageAnalyzer:
         try:
             import base64
             img_b64 = base64.b64encode(image_bytes).decode("utf-8")
-            img_fmt = "png" if image_bytes[:4] == b"\x89PNG" else "jpeg"
+            # Detect image format from magic bytes:
+            #   PNG  → \x89PNG
+            #   WebP → RIFF????WEBP
+            #   JPEG → \xff\xd8 (default fallback)
+            if image_bytes[:4] == b"\x89PNG":
+                img_fmt = "png"
+            elif image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+                img_fmt = "webp"
+            else:
+                img_fmt = "jpeg"
 
             llm = _ChatGroq(
                 model=GROQ_VISION_MODEL_ID,
@@ -799,9 +829,7 @@ def vision_llm_available() -> bool:
     """
     if _GROQ_AVAILABLE:
         api_key = os.environ.get("GROQ_API_KEY", "").strip()
-        if api_key and not any(
-            m in api_key.lower() for m in ("replace_with", "your_", "example", "placeholder")
-        ):
+        if api_key and not _is_api_key_placeholder(api_key):
             return True
     if _OLLAMA_AVAILABLE:
         try:
@@ -811,8 +839,9 @@ def vision_llm_available() -> bool:
                 for m in models_resp.get("models", [])
             ]
             if any(
-                any(c in p for p in pulled)
+                c in p
                 for c in OLLAMA_VISION_MODEL_CANDIDATES
+                for p in pulled
             ):
                 return True
         except Exception:

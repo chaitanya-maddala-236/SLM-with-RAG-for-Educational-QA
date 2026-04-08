@@ -521,10 +521,7 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
         # Multimodal: image analysis / captions used for this query
         image_captions = result_meta.get("image_captions") or []
         if image_captions:
-            # First caption is typically the vision-LLM analysis (longest);
-            # remaining are indexed-image captions.
-            first_cap = image_captions[0] if image_captions else ""
-            is_vision_analysis = len(first_cap) > 200  # vision analyses are verbose
+            is_vision_analysis = result_meta.get("vision_llm_used", False)
             label = "🔬 Vision Analysis (Image Content Read by AI)" if is_vision_analysis else "🖼️ Visual Context (Image Captions)"
             with st.expander(label, expanded=True):
                 for i, cap in enumerate(image_captions, 1):
@@ -634,6 +631,7 @@ def render_chat_column(pipeline: RAGPipeline, embedding_name: str = DEFAULT_EMBE
         "estimated_cost_usd": getattr(result, 'estimated_cost_usd', None),
         "topic_confidence_list": getattr(result, 'topic_confidence_list', None),
         "image_captions": getattr(result, 'image_captions', []),
+        "vision_llm_used": getattr(result, 'vision_llm_used', False),
     }
     st.session_state.last_grounding_score = getattr(result, 'grounding_score', None)
     st.session_state.last_cost = getattr(result, 'estimated_cost_usd', None)

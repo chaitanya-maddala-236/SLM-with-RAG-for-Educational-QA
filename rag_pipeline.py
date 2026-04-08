@@ -543,6 +543,7 @@ class PipelineResult:
     estimated_cost_usd: float = 0.0    # RAG Improvement 18
     image_captions: list[str] = field(default_factory=list)   # Multimodal
     has_image_context: bool = False                            # Multimodal
+    vision_llm_used: bool = False                              # Multimodal: True when Groq/LLaVA was used
 
     def log(self, step: int, message: str) -> None:
         entry = f"[Step {step:>2}] {message}"
@@ -1170,11 +1171,8 @@ class RAGPipeline:
                         image_input, question=user_query
                     )
                     if _vision_analysis:
-                        # Determine whether a true vision LLM was used (not just BLIP)
-                        _used_vision_llm = (
-                            "BLIP" not in self._vision_analyzer.method
-                            and "none" not in self._vision_analyzer.method
-                        )
+                        # Use the explicit is_vision_llm flag instead of string matching
+                        _used_vision_llm = self._vision_analyzer.is_vision_llm
                         _label = "Vision LLM" if _used_vision_llm else "BLIP caption"
                         result.log(
                             7,
@@ -1182,6 +1180,7 @@ class RAGPipeline:
                             f"({len(_vision_analysis)} chars)",
                         )
                         uploaded_image_captions.append(_vision_analysis)
+                        result.vision_llm_used = _used_vision_llm
                 except Exception as exc:
                     result.log(7, f"Step 7b-i: Vision analysis error — {exc}")
 
