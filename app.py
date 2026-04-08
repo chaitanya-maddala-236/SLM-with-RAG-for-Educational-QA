@@ -56,11 +56,15 @@ try:
     from multimodal_processor import (
         load_or_build_image_index,
         multimodal_available,
+        image_index_available,
         get_missing_dependencies,
     )
     _MM_IMPORT_OK = True
 except ImportError:
     def multimodal_available() -> bool:
+        return False
+
+    def image_index_available() -> bool:
         return False
 
     def get_missing_dependencies() -> list:
@@ -337,7 +341,7 @@ def render_controls() -> tuple[str, str, int, str, str, bool]:
         with st.expander("🖼️ Multimodal Status", expanded=False):
             missing = get_missing_dependencies()
             if multimodal_available():
-                if "faiss-cpu" in missing:
+                if not image_index_available():
                     st.success("✅ Image input enabled (caption mode)")
                     st.caption(
                         "Uploaded images are captioned and included as visual context. "

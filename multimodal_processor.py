@@ -537,6 +537,11 @@ def multimodal_available() -> bool:
     return _TRANSFORMERS_AVAILABLE and _PIL_AVAILABLE
 
 
+def image_index_available() -> bool:
+    """Return True when FAISS-backed image indexing/search is available."""
+    return _FAISS_AVAILABLE
+
+
 def get_missing_dependencies() -> list[str]:
     """Return a list of missing optional dependency names."""
     missing: list[str] = []
