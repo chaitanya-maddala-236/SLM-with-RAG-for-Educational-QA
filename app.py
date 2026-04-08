@@ -335,15 +335,22 @@ def render_controls() -> tuple[str, str, int, str, str, bool]:
         # Multimodal status
         st.divider()
         with st.expander("🖼️ Multimodal Status", expanded=False):
+            missing = get_missing_dependencies()
             if multimodal_available():
-                st.success("✅ Multimodal enabled (CLIP + FAISS)")
-                st.caption(
-                    "Upload an image in the chat to query via visual context. "
-                    "To index PDF images run `build_image_index()` from "
-                    "`multimodal_processor.py`."
-                )
+                if "faiss-cpu" in missing:
+                    st.success("✅ Image input enabled (caption mode)")
+                    st.caption(
+                        "Uploaded images are captioned and included as visual context. "
+                        "Install `faiss-cpu` to enable image-index retrieval."
+                    )
+                else:
+                    st.success("✅ Multimodal enabled (caption + image index)")
+                    st.caption(
+                        "Upload an image in the chat to query via visual context. "
+                        "To index PDF images run `build_image_index()` from "
+                        "`multimodal_processor.py`."
+                    )
             else:
-                missing = get_missing_dependencies()
                 st.warning("⚠️ Multimodal not available")
                 st.caption("Missing: " + ", ".join(missing))
 
