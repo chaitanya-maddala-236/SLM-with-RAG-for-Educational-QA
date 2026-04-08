@@ -273,6 +273,19 @@ _COMPOUND_RE = re.compile(
 )
 
 
+def _extract_answer_text(response) -> str:
+    """Extract plain text from an LLM response.
+
+    OllamaLLM.invoke() returns a plain ``str``; ChatGroq (and other
+    LangChain ChatModel subclasses) return an ``AIMessage`` whose text
+    lives in ``.content``.  This helper normalises both so the rest of
+    the pipeline always works with a plain string.
+    """
+    if hasattr(response, "content"):
+        return str(response.content)
+    return str(response)
+
+
 def _cosine_similarity(v1: list[float], v2: list[float]) -> float:
     """Return cosine similarity between two embedding vectors.
 
@@ -825,7 +838,7 @@ class RAGPipeline:
                     answer = self.llm.invoke(prompt_text)
                 except Exception as e:
                     answer = f"[Error generating answer: {e}]"
-                result.answer = answer.strip()
+                result.answer = _extract_answer_text(answer).strip()
                 result.log(10, f"Answer generated ({len(result.answer)} chars).")
 
                 # ── Token counting ────────────────────────────────────────────
@@ -1257,7 +1270,7 @@ class RAGPipeline:
         except Exception as e:
             answer = f"[Error generating answer: {e}]"
 
-        result.answer = answer.strip()
+        result.answer = _extract_answer_text(answer).strip()
         result.log(10, f"Answer generated ({len(result.answer)} chars).")
 
         # RAG Improvement 14: Compute grounding score
