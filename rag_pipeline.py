@@ -97,6 +97,7 @@ try:
         CLIPEmbedder as _CLIPEmbedder,
         ImageCaptioner as _ImageCaptioner,
         ImageFAISSIndex as _ImageFAISSIndex,
+        VisionImageAnalyzer as _VisionImageAnalyzer,
         fuse_multimodal_context as _fuse_multimodal_context,
     )
     _MULTIMODAL_AVAILABLE = True
@@ -205,6 +206,32 @@ Context:
 {context}
 
 Question: {question}
+
+Answer:""",
+)
+
+# ── Prompt template for vision-LLM analysis (image is directly read) ──────────
+# Used when a vision LLM (Groq / Ollama LLaVA) produced a rich image analysis.
+# The image analysis is placed prominently so the SLM treats it as the primary
+# source and uses retrieved text context only as supplementary material.
+VISION_ANALYSIS_PROMPT = PromptTemplate(
+    input_variables=["vision_analysis", "text_context", "question"],
+    template="""You are a helpful educational assistant for students.
+
+A vision AI has analysed the image uploaded by the student and produced the
+following detailed analysis. Use it as your primary source to answer the question.
+
+=== Vision Analysis (what the AI read from the image) ===
+{vision_analysis}
+
+=== Supplementary Text Context (from knowledge base) ===
+{text_context}
+
+Question: {question}
+
+Using the Vision Analysis above as your main source, answer the question clearly
+and concisely for the student. If specific details (labels, values, steps) are
+visible in the image analysis, include them in your answer.
 
 Answer:""",
 )
@@ -516,6 +543,7 @@ class PipelineResult:
     estimated_cost_usd: float = 0.0    # RAG Improvement 18
     image_captions: list[str] = field(default_factory=list)   # Multimodal
     has_image_context: bool = False                            # Multimodal
+    vision_llm_used: bool = False                              # Multimodal: True when Groq/LLaVA was used
 
     def log(self, step: int, message: str) -> None:
         entry = f"[Step {step:>2}] {message}"
@@ -650,6 +678,16 @@ class RAGPipeline:
         self._image_index = image_index
         self._clip_embedder: "_CLIPEmbedder | None" = None
         self._image_captioner: "_ImageCaptioner | None" = None
+        self._vision_analyzer: "_VisionImageAnalyzer | None" = None
+        if _MULTIMODAL_AVAILABLE:
+            # Always initialise the vision analyzer — it probes Groq/Ollama on
+            # construction and falls back gracefully to BLIP or "unavailable".
+            try:
+                self._vision_analyzer = _VisionImageAnalyzer()
+                print(f"[Init] Vision analyzer ready: {self._vision_analyzer.method}")
+            except Exception as exc:
+                print(f"[Init] Vision analyzer unavailable: {exc}")
+                self._vision_analyzer = None
         if self._image_index is not None and _MULTIMODAL_AVAILABLE:
             try:
                 self._clip_embedder = _CLIPEmbedder()
@@ -1107,64 +1145,73 @@ class RAGPipeline:
             )
         result.log(7, f"Retrieved {len(retrieved)} document(s) after reranking.")
 
-        # ── Step 7b: Multimodal image retrieval ───────────────────────────────
-        # Uses the CLIP image index when available.  For image queries the
-        # uploaded image is encoded with CLIP; for text queries the query itself
-        # is encoded with the CLIP text encoder so that relevant images can still
-        # be surfaced.  Captions from matching images are later fused into the
-        # SLM context.
+        # ── Step 7b: Multimodal image analysis + retrieval ────────────────────
+        # When an image is uploaded the pipeline now has two sub-steps:
+        #   7b-i  Vision analysis — a vision LLM (Groq / Ollama LLaVA) reads the
+        #         image and produces a rich educational description.  Falls back to
+        #         BLIP captioning when no vision LLM is configured.
+        #   7b-ii CLIP image-index search — if a PDF image index has been built,
+        #         additionally search it with the CLIP embedding of the query to
+        #         surface related indexed images (unchanged from before).
         _image_hits: list = []
-        uploaded_image_caption: str | None = None
         uploaded_image_captions: list[str] = []
-        if image_input is not None and _MULTIMODAL_AVAILABLE:
-            try:
-                import io as _io
-                from PIL import Image as _PILImg  # type: ignore[import]
-                if self._image_captioner is None:
-                    self._image_captioner = _ImageCaptioner()
-                pil_img_for_caption = _PILImg.open(_io.BytesIO(image_input)).convert("RGB")
-                uploaded_image_caption = self._image_captioner.caption(pil_img_for_caption)
-                if uploaded_image_caption:
-                    result.log(7, "Step 7b: Generated caption from uploaded image")
-            except Exception as exc:
-                result.log(7, f"Step 7b: Uploaded-image captioning error — {exc}")
+        _vision_analysis: str | None = None          # full vision-LLM analysis
+        _used_vision_llm: bool = False               # True when Groq/LLaVA was used
 
+        if image_input is not None and _MULTIMODAL_AVAILABLE:
+            # ── 7b-i: Vision LLM analysis (primary path) ──────────────────────
+            if self._vision_analyzer is not None and self._vision_analyzer.available:
+                try:
+                    result.log(
+                        7,
+                        f"Step 7b-i: Analyzing image with vision model "
+                        f"({self._vision_analyzer.method}) …",
+                    )
+                    _vision_analysis = self._vision_analyzer.analyze(
+                        image_input, question=user_query
+                    )
+                    if _vision_analysis:
+                        # Use the explicit is_vision_llm flag instead of string matching
+                        _used_vision_llm = self._vision_analyzer.is_vision_llm
+                        _label = "Vision LLM" if _used_vision_llm else "BLIP caption"
+                        result.log(
+                            7,
+                            f"Step 7b-i: {_label} analysis complete "
+                            f"({len(_vision_analysis)} chars)",
+                        )
+                        uploaded_image_captions.append(_vision_analysis)
+                        result.vision_llm_used = _used_vision_llm
+                except Exception as exc:
+                    result.log(7, f"Step 7b-i: Vision analysis error — {exc}")
+
+        # ── 7b-ii: CLIP image-index search (supplementary) ────────────────────
         if self._image_index is not None and self._clip_embedder is not None:
             try:
                 if image_input is not None:
-                    # Image query path: encode the uploaded image with CLIP
                     import io as _io
                     from PIL import Image as _PILImg  # type: ignore[import]
                     pil_img = _PILImg.open(_io.BytesIO(image_input)).convert("RGB")
                     query_vec = self._clip_embedder.embed_image(pil_img)
-                    result.log(
-                        7,
-                        "Step 7b: Image input — encoded with CLIP image encoder",
-                    )
+                    result.log(7, "Step 7b-ii: Image CLIP-encoded for index search")
                 else:
-                    # Text query path: encode query text with CLIP text encoder
                     query_vec = self._clip_embedder.embed_text(retrieval_query)
-                    result.log(
-                        7,
-                        "Step 7b: Text query — searching image index with CLIP "
-                        "text encoder",
-                    )
+                    result.log(7, "Step 7b-ii: Text query searched in image index (CLIP)")
                 _image_hits = self._image_index.search(query_vec, k=3)
                 caption_count = sum(1 for rec, _ in _image_hits if rec.caption)
                 result.log(
                     7,
-                    f"Step 7b: Retrieved {len(_image_hits)} image(s), "
+                    f"Step 7b-ii: Retrieved {len(_image_hits)} indexed image(s), "
                     f"{caption_count} with caption(s)",
                 )
                 result.image_captions = [
                     rec.caption for rec, _ in _image_hits if rec.caption
                 ]
             except Exception as exc:
-                result.log(7, f"Step 7b: Image retrieval error — {exc}")
-        if uploaded_image_caption:
-            if uploaded_image_caption not in result.image_captions:
-                result.image_captions.insert(0, uploaded_image_caption)
-            uploaded_image_captions.append(uploaded_image_caption)
+                result.log(7, f"Step 7b-ii: Image index search error — {exc}")
+
+        # Merge captions: vision analysis first, then any index captions
+        if _vision_analysis and _vision_analysis not in result.image_captions:
+            result.image_captions.insert(0, _vision_analysis)
         result.has_image_context = bool(result.image_captions)
 
         # ── Determine retrieval similarity score and pipeline mode ────────────
@@ -1203,59 +1250,98 @@ class RAGPipeline:
 
         # ── Step 9: SLM generation ────────────────────────────────────────────
         if result.mode == "RAG":
-            # RAG Improvement 15: use context budget manager
-            # Multimodal: fuse image captions within remaining token budget
+            # Multimodal path: use vision analysis when available
             if result.has_image_context and _MULTIMODAL_AVAILABLE:
-                context = _build_multimodal_context_with_budget(
-                    result.retrieved_docs,
-                    _image_hits,
-                    self.model_name,
-                    additional_captions=uploaded_image_captions,
-                )
-                prompt_text = MULTIMODAL_PROMPT.format(context=context, question=user_query)
-                result.log(
-                    9,
-                    "Mode RAG (multimodal): fused text + image captions "
-                    "(budget-capped) sent to SLM …",
-                )
+                text_context = _build_context_with_budget(result.retrieved_docs, self.model_name)
+                if _used_vision_llm and _vision_analysis:
+                    # Vision LLM produced a detailed analysis — use the dedicated
+                    # vision-first prompt so the SLM treats it as primary source.
+                    prompt_text = VISION_ANALYSIS_PROMPT.format(
+                        vision_analysis=_vision_analysis,
+                        text_context=text_context,
+                        question=user_query,
+                    )
+                    result.log(
+                        9,
+                        "Mode RAG (vision LLM): vision analysis + text context "
+                        "sent to SLM with vision-first prompt …",
+                    )
+                else:
+                    # BLIP or index captions only — use fused multimodal context
+                    context = _build_multimodal_context_with_budget(
+                        result.retrieved_docs,
+                        _image_hits,
+                        self.model_name,
+                        additional_captions=uploaded_image_captions,
+                    )
+                    prompt_text = MULTIMODAL_PROMPT.format(context=context, question=user_query)
+                    result.log(
+                        9,
+                        "Mode RAG (multimodal): fused text + image captions "
+                        "(budget-capped) sent to SLM …",
+                    )
             else:
                 context = _build_context_with_budget(result.retrieved_docs, self.model_name)
                 prompt_text = RAG_PROMPT.format(context=context, question=user_query)
-                result.log(9, "Mode RAG: sending context + question to Phi-3 via Ollama …")
+                result.log(9, "Mode RAG: sending context + question to SLM …")
         elif result.mode == "Partial RAG":
             # Bugfix (Bug 1): use retrieved docs even when score is below the
             # full RAG threshold instead of discarding them entirely.
-            # RAG Improvement 15: use context budget manager
-            # Multimodal: fuse image captions within remaining token budget
             if result.has_image_context and _MULTIMODAL_AVAILABLE:
-                context = _build_multimodal_context_with_budget(
-                    result.retrieved_docs,
-                    _image_hits,
-                    self.model_name,
-                    additional_captions=uploaded_image_captions,
-                )
-                prompt_text = MULTIMODAL_PROMPT.format(context=context, question=user_query)
-                result.log(
-                    9,
-                    "Mode Partial RAG (multimodal): fused text + image captions "
-                    "(budget-capped) …",
-                )
+                text_context = _build_context_with_budget(result.retrieved_docs, self.model_name)
+                if _used_vision_llm and _vision_analysis:
+                    prompt_text = VISION_ANALYSIS_PROMPT.format(
+                        vision_analysis=_vision_analysis,
+                        text_context=text_context,
+                        question=user_query,
+                    )
+                    result.log(
+                        9,
+                        "Mode Partial RAG (vision LLM): vision analysis + partial "
+                        "text context sent to SLM …",
+                    )
+                else:
+                    context = _build_multimodal_context_with_budget(
+                        result.retrieved_docs,
+                        _image_hits,
+                        self.model_name,
+                        additional_captions=uploaded_image_captions,
+                    )
+                    prompt_text = MULTIMODAL_PROMPT.format(context=context, question=user_query)
+                    result.log(
+                        9,
+                        "Mode Partial RAG (multimodal): fused text + image captions "
+                        "(budget-capped) …",
+                    )
             else:
                 context = _build_context_with_budget(result.retrieved_docs, self.model_name)
                 prompt_text = PARTIAL_CONTEXT_PROMPT.format(context=context, question=user_query)
             result.log(
                 9,
-                "Mode Partial RAG: partial context sent to Phi-3 "
+                "Mode Partial RAG: partial context sent to SLM "
                 "(score below RAG threshold but above partial threshold) …",
             )
         else:
             _pipeline_stats["fallback_triggers"] += 1
-            if _is_vague_query(user_query):
+            # When a vision LLM analysis is available even in fallback mode,
+            # build a vision-aware fallback prompt so the image content is used.
+            if result.has_image_context and _used_vision_llm and _vision_analysis:
+                prompt_text = VISION_ANALYSIS_PROMPT.format(
+                    vision_analysis=_vision_analysis,
+                    text_context="No relevant text documents were retrieved.",
+                    question=user_query,
+                )
+                result.log(
+                    9,
+                    "Mode LLM Fallback (vision LLM): answering from image analysis "
+                    "only (no relevant text context retrieved) …",
+                )
+            elif _is_vague_query(user_query):
                 prompt_text = VAGUE_QUERY_PROMPT.format(query=user_query)
                 result.log(
                     9,
                     "Mode LLM Fallback (vague query): requesting multiple "
-                    "interpretations from Phi-3 …",
+                    "interpretations from SLM …",
                 )
             else:
                 prompt_text = LLM_FALLBACK_PROMPT.format(question=user_query)

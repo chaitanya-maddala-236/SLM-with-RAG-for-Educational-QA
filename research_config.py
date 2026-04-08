@@ -67,6 +67,15 @@ MODEL_REGISTRY = [
      "model_id": "gemma2-9b-it", "params_billions": 9.0,
      "context_window": 8192, "cost_per_1k_input_tokens": 0.00020,
      "cost_per_1k_output_tokens": 0.00020},
+    # ── Groq vision LLM (for multimodal image analysis) ────────────────────────
+    # llama-3.2-11b-vision-preview is the dedicated vision model used by
+    # VisionImageAnalyzer when GROQ_API_KEY is set.  Listed here so it appears
+    # in model-cost tracking and research comparisons.
+    {"name": "groq-llama-vision", "type": "LLM", "provider": "groq",
+     "model_id": "llama-3.2-11b-vision-preview", "params_billions": 11.0,
+     "context_window": 8192, "cost_per_1k_input_tokens": 0.00018,
+     "cost_per_1k_output_tokens": 0.00018,
+     "description": "Vision-capable Llama 3.2 11B — used by VisionImageAnalyzer for image understanding"},
 ]
 
 # ── Derived model lists ──────────────────────────────────────────────────────
