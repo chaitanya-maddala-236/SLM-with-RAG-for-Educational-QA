@@ -5,7 +5,6 @@ __pycache__/
 
 # Virtual environments
 venv/
-.env/
 .venv/
 ENV/
 env/
@@ -59,6 +58,7 @@ coverage.xml
 # Environment variables
 .env
 .env.*
+!.env.example
 
 # Logs
 *.log

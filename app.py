@@ -19,6 +19,14 @@ import datetime
 # Suppress torchvision file-watcher warnings
 os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
 
+
+def _is_configured_secret(value: str | None) -> bool:
+    v = (value or "").strip()
+    if not v:
+        return False
+    lowered = v.lower()
+    return not any(x in lowered for x in ("replace_with", "your_", "example", "placeholder"))
+
 import streamlit as st
 from langchain_community.vectorstores import Chroma
 
@@ -122,7 +130,7 @@ def init_session_state() -> None:
     if "selected_embedding" not in st.session_state:
         st.session_state.selected_embedding = DEFAULT_EMBEDDING
     if "selected_model" not in st.session_state:
-        st.session_state.selected_model = "phi3"
+        st.session_state.selected_model = "groq-llama3-8b"
     if "selected_retrieval" not in st.session_state:
         st.session_state.selected_retrieval = "hybrid"
     if "selected_topk" not in st.session_state:
@@ -173,47 +181,19 @@ def render_controls() -> tuple[str, str, int, str, str, bool]:
         st.divider()
         st.subheader("🤖 Model Settings")
 
-        # ── SLM / LLM selector ─────────────────────────────────────────────
-        slm_models = [m["name"] for m in MODEL_REGISTRY if m["type"] == "SLM"]
-        llm_models = [m["name"] for m in MODEL_REGISTRY if m["type"] == "LLM"]
-
-        model_type_choice = st.radio(
-            "Model type",
-            ["SLM (local Ollama)", "LLM (API)"],
-            help="SLMs run locally via Ollama (free). LLMs use paid APIs.",
-            horizontal=True,
+        # ── Groq selector ──────────────────────────────────────────────────
+        groq_models = [m["name"] for m in MODEL_REGISTRY if m.get("provider") == "groq"]
+        selected_model = st.selectbox(
+            "Groq Model",
+            groq_models,
+            index=0,
+            help="Requires GROQ_API_KEY set in your environment or .env file.",
         )
-
-        if model_type_choice == "SLM (local Ollama)":
-            default_idx = slm_models.index("phi3") if "phi3" in slm_models else 0
-            selected_model = st.selectbox(
-                "SLM Model",
-                slm_models,
-                index=default_idx,
-                help="Must be installed via: ollama pull <model>",
-            )
+        import os as _os
+        if _is_configured_secret(_os.environ.get("GROQ_API_KEY")):
+            st.success("✅ GROQ_API_KEY is set")
         else:
-            selected_model = st.selectbox(
-                "LLM (API) Model",
-                llm_models,
-                index=0,
-                help="Requires the corresponding API key set as an env var.",
-            )
-            # Show which API key is needed
-            cfg = next((m for m in MODEL_REGISTRY if m["name"] == selected_model), {})
-            provider = cfg.get("provider", "")
-            key_map = {
-                "openai": "OPENAI_API_KEY",
-                "anthropic": "ANTHROPIC_API_KEY",
-                "google": "GOOGLE_API_KEY",
-            }
-            if provider in key_map:
-                import os as _os
-                env_var = key_map[provider]
-                if _os.environ.get(env_var):
-                    st.success(f"✅ {env_var} is set")
-                else:
-                    st.warning(f"⚠️ {env_var} not set — queries will fail")
+            st.warning("⚠️ GROQ_API_KEY not set — queries will fail")
 
         selected_retrieval = st.selectbox(
             "Retrieval Mode",
@@ -504,7 +484,7 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
 def render_chat_column(pipeline: RAGPipeline, embedding_name: str = DEFAULT_EMBEDDING) -> None:
     st.title("🎓 EduRAG — Educational Conversational QA")
     st.caption(
-        f"Powered by {pipeline.model_name} (Ollama) · {embedding_name} Embeddings · Chroma · LangChain  \n"
+        f"Powered by {pipeline.model_name} · {embedding_name} Embeddings · Chroma · LangChain  \n"
         "Topics: water cycle · carbon cycle · bicycle · photosynthesis"
     )
 
@@ -668,4 +648,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-

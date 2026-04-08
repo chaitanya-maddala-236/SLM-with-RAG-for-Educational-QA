@@ -41,27 +41,6 @@ from langchain_core.prompts import PromptTemplate
 from langchain_community.vectorstores import Chroma
 
 # ── API LLM availability flags ────────────────────────────────────────────────
-_OPENAI_AVAILABLE = False
-try:
-    from langchain_openai import ChatOpenAI as _ChatOpenAI  # type: ignore[import]
-    _OPENAI_AVAILABLE = True
-except ImportError:
-    pass
-
-_ANTHROPIC_AVAILABLE = False
-try:
-    from langchain_anthropic import ChatAnthropic as _ChatAnthropic  # type: ignore[import]
-    _ANTHROPIC_AVAILABLE = True
-except ImportError:
-    pass
-
-_GOOGLE_AVAILABLE = False
-try:
-    from langchain_google_genai import ChatGoogleGenerativeAI as _ChatGoogleAI  # type: ignore[import]
-    _GOOGLE_AVAILABLE = True
-except ImportError:
-    pass
-
 _GROQ_AVAILABLE = False
 try:
     from langchain_groq import ChatGroq as _ChatGroq  # type: ignore[import]
@@ -116,6 +95,7 @@ from research_config import MODEL_REGISTRY
 try:
     from multimodal_processor import (
         CLIPEmbedder as _CLIPEmbedder,
+        ImageCaptioner as _ImageCaptioner,
         ImageFAISSIndex as _ImageFAISSIndex,
         fuse_multimodal_context as _fuse_multimodal_context,
     )
@@ -417,6 +397,7 @@ def _build_multimodal_context_with_budget(
     docs: list[Document],
     image_hits: list,
     model_name: str,
+    additional_captions: list[str] | None = None,
 ) -> str:
     """
     Build a multimodal context string (text chunks + image captions) respecting
@@ -445,10 +426,25 @@ def _build_multimodal_context_with_budget(
 
     # ── Caption portion (remaining budget) ────────────────────────────────────
     caption_parts: list[str] = []
-    for rec, _ in image_hits:
-        if not rec.caption:
+    caption_candidates = [
+        *(additional_captions or []),
+        *[
+            rec.caption
+            for rec, _ in image_hits
+            if rec.caption
+        ],
+    ]
+
+    seen_captions: set[str] = set()
+    for raw_caption in caption_candidates:
+        caption_text = (raw_caption or "").strip()
+        if not caption_text:
             continue
-        caption_line = f"[Image — {rec.source}, page {rec.page}]: {rec.caption}"
+        key = caption_text.lower()
+        if key in seen_captions:
+            continue
+        seen_captions.add(key)
+        caption_line = f"[Image Context]: {caption_text}"
         # Tokenize the full caption once to avoid per-word re-encoding overhead.
         cap_tokens = _count_tokens(caption_line)
         remaining = budget - used
@@ -528,9 +524,6 @@ def _build_llm(model_name: str, temperature: float = 0.1):
 
     Looks up the model in MODEL_REGISTRY to determine the provider:
       - ``ollama``    → OllamaLLM (local, no API key needed)
-      - ``openai``    → ChatOpenAI  (requires OPENAI_API_KEY)
-      - ``anthropic`` → ChatAnthropic (requires ANTHROPIC_API_KEY)
-      - ``google``    → ChatGoogleGenerativeAI (requires GOOGLE_API_KEY)
       - ``groq``      → ChatGroq (requires GROQ_API_KEY)
 
     Falls back to OllamaLLM for any unknown provider.
@@ -549,54 +542,17 @@ def _build_llm(model_name: str, temperature: float = 0.1):
     """
     import os as _os
 
+    def _is_configured_secret(value: str | None) -> bool:
+        v = (value or "").strip()
+        if not v:
+            return False
+        lowered = v.lower()
+        placeholder_markers = ("replace_with", "your_", "example", "placeholder")
+        return not any(marker in lowered for marker in placeholder_markers)
+
     cfg = next((m for m in MODEL_REGISTRY if m["name"] == model_name), None)
     provider = cfg["provider"] if cfg else "ollama"
     model_id = cfg["model_id"] if cfg else model_name
-
-    if provider == "openai":
-        if not _OPENAI_AVAILABLE:
-            raise ImportError(
-                "langchain-openai is not installed. "
-                "Run: pip install langchain-openai"
-            )
-        api_key = _os.environ.get("OPENAI_API_KEY", "")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is not set.")
-        return _ChatOpenAI(
-            model=model_id,
-            temperature=temperature,
-            api_key=api_key,
-        )
-
-    if provider == "anthropic":
-        if not _ANTHROPIC_AVAILABLE:
-            raise ImportError(
-                "langchain-anthropic is not installed. "
-                "Run: pip install langchain-anthropic"
-            )
-        api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
-        if not api_key:
-            raise ValueError("ANTHROPIC_API_KEY environment variable is not set.")
-        return _ChatAnthropic(
-            model=model_id,
-            temperature=temperature,
-            api_key=api_key,
-        )
-
-    if provider == "google":
-        if not _GOOGLE_AVAILABLE:
-            raise ImportError(
-                "langchain-google-genai is not installed. "
-                "Run: pip install langchain-google-genai"
-            )
-        api_key = _os.environ.get("GOOGLE_API_KEY", "")
-        if not api_key:
-            raise ValueError("GOOGLE_API_KEY environment variable is not set.")
-        return _ChatGoogleAI(
-            model=model_id,
-            temperature=temperature,
-            google_api_key=api_key,
-        )
 
     if provider == "groq":
         if not _GROQ_AVAILABLE:
@@ -605,7 +561,7 @@ def _build_llm(model_name: str, temperature: float = 0.1):
                 "Run: pip install langchain-groq"
             )
         api_key = _os.environ.get("GROQ_API_KEY", "")
-        if not api_key:
+        if not _is_configured_secret(api_key):
             raise ValueError("GROQ_API_KEY environment variable is not set.")
         return _ChatGroq(
             model=model_id,
@@ -644,9 +600,21 @@ class RAGPipeline:
             self.llm = _build_llm(model_name, temperature=0.1)
             print(f"[Init] LLM loaded: {model_name}")
         except Exception as exc:
-            print(f"[Init] LLM load failed for '{model_name}': {exc}. "
-                  "Falling back to phi3 via Ollama.")
-            self.llm = OllamaLLM(model="phi3", temperature=0.1)
+            fallback_model = "groq-llama3-8b"
+            print(
+                f"[Init] LLM load failed for '{model_name}': {exc}. "
+                f"Falling back to {fallback_model}."
+            )
+            try:
+                self.llm = _build_llm(fallback_model, temperature=0.1)
+                print(f"[Init] LLM loaded: {fallback_model}")
+            except Exception as fallback_exc:
+                raise RuntimeError(
+                    f"Unable to initialize LLM '{model_name}' or fallback "
+                    f"'{fallback_model}'. Groq-backed models require a valid "
+                    f"GROQ_API_KEY. Original error: {exc}. "
+                    f"Fallback error: {fallback_exc}"
+                ) from fallback_exc
         self._ctx_builder = ContextualQueryBuilder()
         # Embedding function reused for context-similarity checks
         self._embed_fn = vector_store._embedding_function
@@ -667,6 +635,7 @@ class RAGPipeline:
         # Multimodal extension: optional FAISS image index + CLIP embedder
         self._image_index = image_index
         self._clip_embedder: "_CLIPEmbedder | None" = None
+        self._image_captioner: "_ImageCaptioner | None" = None
         if self._image_index is not None and _MULTIMODAL_AVAILABLE:
             try:
                 self._clip_embedder = _CLIPEmbedder()
@@ -1131,6 +1100,21 @@ class RAGPipeline:
         # be surfaced.  Captions from matching images are later fused into the
         # SLM context.
         _image_hits: list = []
+        uploaded_image_caption: str | None = None
+        uploaded_image_captions: list[str] = []
+        if image_input is not None and _MULTIMODAL_AVAILABLE:
+            try:
+                import io as _io
+                from PIL import Image as _PILImg  # type: ignore[import]
+                if self._image_captioner is None:
+                    self._image_captioner = _ImageCaptioner()
+                pil_img_for_caption = _PILImg.open(_io.BytesIO(image_input)).convert("RGB")
+                uploaded_image_caption = self._image_captioner.caption(pil_img_for_caption)
+                if uploaded_image_caption:
+                    result.log(7, "Step 7b: Generated caption from uploaded image")
+            except Exception as exc:
+                result.log(7, f"Step 7b: Uploaded-image captioning error — {exc}")
+
         if self._image_index is not None and self._clip_embedder is not None:
             try:
                 if image_input is not None:
@@ -1161,9 +1145,13 @@ class RAGPipeline:
                 result.image_captions = [
                     rec.caption for rec, _ in _image_hits if rec.caption
                 ]
-                result.has_image_context = bool(result.image_captions)
             except Exception as exc:
                 result.log(7, f"Step 7b: Image retrieval error — {exc}")
+        if uploaded_image_caption:
+            if uploaded_image_caption not in result.image_captions:
+                result.image_captions.insert(0, uploaded_image_caption)
+            uploaded_image_captions.append(uploaded_image_caption)
+        result.has_image_context = bool(result.image_captions)
 
         # ── Determine retrieval similarity score and pipeline mode ────────────
         try:
@@ -1205,7 +1193,10 @@ class RAGPipeline:
             # Multimodal: fuse image captions within remaining token budget
             if result.has_image_context and _MULTIMODAL_AVAILABLE:
                 context = _build_multimodal_context_with_budget(
-                    result.retrieved_docs, _image_hits, self.model_name
+                    result.retrieved_docs,
+                    _image_hits,
+                    self.model_name,
+                    additional_captions=uploaded_image_captions,
                 )
                 prompt_text = MULTIMODAL_PROMPT.format(context=context, question=user_query)
                 result.log(
@@ -1224,7 +1215,10 @@ class RAGPipeline:
             # Multimodal: fuse image captions within remaining token budget
             if result.has_image_context and _MULTIMODAL_AVAILABLE:
                 context = _build_multimodal_context_with_budget(
-                    result.retrieved_docs, _image_hits, self.model_name
+                    result.retrieved_docs,
+                    _image_hits,
+                    self.model_name,
+                    additional_captions=uploaded_image_captions,
                 )
                 prompt_text = MULTIMODAL_PROMPT.format(context=context, question=user_query)
                 result.log(

@@ -104,9 +104,9 @@ class TestResearchConfig(unittest.TestCase):
             with self.subTest(model=name):
                 self.assertIn(name, self.slm)
 
-    def test_benchmark_api_llms_present(self):
-        """GPT-4.1, Claude 3 Sonnet and Gemini 1.5 Pro are required benchmark LLMs."""
-        for name in ("gpt-4.1", "claude-3-sonnet", "gemini-1.5-pro"):
+    def test_groq_api_llms_present(self):
+        """Groq benchmark models must exist in the LLM list."""
+        for name in ("groq-llama3-8b", "groq-llama3-70b", "groq-mixtral", "groq-gemma2"):
             with self.subTest(model=name):
                 self.assertIn(name, self.llm)
 
@@ -127,9 +127,10 @@ class TestResearchConfig(unittest.TestCase):
 
     def test_api_model_providers(self):
         expected = {
-            "gpt-4.1": "openai",
-            "claude-3-sonnet": "anthropic",
-            "gemini-1.5-pro": "google",
+            "groq-llama3-8b": "groq",
+            "groq-llama3-70b": "groq",
+            "groq-mixtral": "groq",
+            "groq-gemma2": "groq",
         }
         for name, prov in expected.items():
             with self.subTest(model=name):
@@ -840,46 +841,18 @@ class TestBuildLLM(unittest.TestCase):
         llm = self._build_llm("phi3")
         self.assertIsInstance(llm, OllamaLLM)
 
-    def test_openai_model_raises_valueerror_without_key(self):
-        original = os.environ.pop("OPENAI_API_KEY", None)
+    def test_groq_model_raises_valueerror_without_key(self):
+        original = os.environ.pop("GROQ_API_KEY", None)
         try:
             with self.assertRaises((ValueError, ImportError)):
-                self._build_llm("gpt-4.1")
+                self._build_llm("groq-llama3-8b")
         finally:
             if original is not None:
-                os.environ["OPENAI_API_KEY"] = original
+                os.environ["GROQ_API_KEY"] = original
 
-    def test_anthropic_model_raises_valueerror_without_key(self):
-        original = os.environ.pop("ANTHROPIC_API_KEY", None)
-        try:
-            with self.assertRaises((ValueError, ImportError)):
-                self._build_llm("claude-3-sonnet")
-        finally:
-            if original is not None:
-                os.environ["ANTHROPIC_API_KEY"] = original
-
-    def test_google_model_raises_valueerror_without_key(self):
-        original = os.environ.pop("GOOGLE_API_KEY", None)
-        try:
-            with self.assertRaises((ValueError, ImportError)):
-                self._build_llm("gemini-1.5-pro")
-        finally:
-            if original is not None:
-                os.environ["GOOGLE_API_KEY"] = original
-
-    @unittest.skipUnless(os.environ.get("OPENAI_API_KEY"), "OPENAI_API_KEY not set")
-    def test_openai_model_with_key(self):
-        llm = self._build_llm("gpt-4.1")
-        self.assertIsNotNone(llm)
-
-    @unittest.skipUnless(os.environ.get("ANTHROPIC_API_KEY"), "ANTHROPIC_API_KEY not set")
-    def test_anthropic_model_with_key(self):
-        llm = self._build_llm("claude-3-sonnet")
-        self.assertIsNotNone(llm)
-
-    @unittest.skipUnless(os.environ.get("GOOGLE_API_KEY"), "GOOGLE_API_KEY not set")
-    def test_google_model_with_key(self):
-        llm = self._build_llm("gemini-1.5-pro")
+    @unittest.skipUnless(os.environ.get("GROQ_API_KEY"), "GROQ_API_KEY not set")
+    def test_groq_model_with_key(self):
+        llm = self._build_llm("groq-llama3-8b")
         self.assertIsNotNone(llm)
 
 
@@ -990,7 +963,7 @@ class TestComputeAllMetrics(unittest.TestCase):
             k=5,
             mode="RAG",
         )
-        for key in ("precision_at_k", "recall_at_k", "mrr", "faithfulness"):
+        for key in ("Precision@5", "Recall@5", "MRR", "Faithfulness"):
             with self.subTest(key=key):
                 self.assertIn(key, result)
 

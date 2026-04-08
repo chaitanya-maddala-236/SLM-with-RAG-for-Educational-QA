@@ -42,14 +42,14 @@ SEPARATOR = "=" * 70
 def run_demo() -> None:
     print(SEPARATOR)
     print("  Educational Conversational RAG System — Demo Mode")
-    print("  SLM: Phi-3 via Ollama  |  Embeddings: BGE  |  DB: Chroma")
+    print("  LLM: Groq Llama 3 8B  |  Embeddings: BGE  |  DB: Chroma")
     print(SEPARATOR)
 
     print("\n[Init] Building vector store …")
     vector_store = build_vector_store(persist=True)
 
     print("[Init] Loading RAG pipeline …")
-    pipeline = RAGPipeline(vector_store=vector_store, model_name="phi3", top_k=5)
+    pipeline = RAGPipeline(vector_store=vector_store, model_name="groq-llama3-8b", top_k=5)
 
     memory = ConversationMemory(max_turns=5)
     topic_manager = TopicMemoryManager()
@@ -151,7 +151,7 @@ def run_ablation_study() -> None:
         # Patch the function reference used inside rag_pipeline module
         _rag_mod.hierarchical_retrieve = patch_fn
 
-        pipeline = RAGPipeline(vector_store=vector_store, model_name="phi3", top_k=5)
+        pipeline = RAGPipeline(vector_store=vector_store, model_name="groq-llama3-8b", top_k=5)
 
         all_metrics: list[dict] = []
         for query in ABLATION_QUERIES:
