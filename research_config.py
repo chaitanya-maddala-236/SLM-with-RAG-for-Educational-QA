@@ -74,12 +74,17 @@ MODEL_REGISTRY = [
 SLM_MODELS = [m["name"] for m in MODEL_REGISTRY if m["type"] == "SLM"]
 LLM_MODELS = [m["name"] for m in MODEL_REGISTRY if m["type"] == "LLM"]
 GROQ_MODELS = [m["name"] for m in MODEL_REGISTRY if m.get("provider") == "groq"]
+# ALL_MODELS includes every registered model regardless of provider.
+ALL_MODELS = [m["name"] for m in MODEL_REGISTRY]
 
 # ── Experiment axes ──────────────────────────────────────────────────────────
 
-# MODELS_TO_EVALUATE is Groq-only for API-based research comparison.
-# Groq models require GROQ_API_KEY to be set in the environment.
-MODELS_TO_EVALUATE = GROQ_MODELS
+# MODELS_TO_EVALUATE covers all registered models so that every evaluation
+# mode (model_comparison, token_comparison, slm_vs_llm, full_matrix, …)
+# compares both local Ollama SLMs and Groq API LLMs side-by-side.
+# Models that are unavailable at runtime are skipped automatically by
+# ResearchEvaluator._is_model_available().
+MODELS_TO_EVALUATE = ALL_MODELS
 RETRIEVAL_MODES = ["vector_only", "bm25_only", "hybrid"]
 
 # ── Per-comparison output files (one file per comparison type) ────────────────
