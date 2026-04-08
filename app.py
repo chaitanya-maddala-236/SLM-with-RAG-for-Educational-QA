@@ -185,15 +185,29 @@ def render_controls() -> tuple[str, str, int, str, str, bool]:
 
         # ── Unified model selector (SLM via Ollama + LLM via Groq) ────────
         all_model_names = [m["name"] for m in MODEL_REGISTRY]
-        # Build display labels that show the provider clearly
+        # Build display labels that show the provider clearly and expose the
+        # actual backing model when `name` is an alias.
         _provider_labels = {
             "ollama": "🖥️ Ollama (local)",
             "groq": "☁️ Groq (API)",
         }
-        all_model_labels = [
-            f"{m['name']}  [{_provider_labels.get(m.get('provider', 'ollama'), m.get('provider', 'ollama'))}]"
-            for m in MODEL_REGISTRY
-        ]
+        all_model_labels = []
+        for m in MODEL_REGISTRY:
+            provider_label = _provider_labels.get(
+                m.get("provider", "ollama"),
+                m.get("provider", "ollama"),
+            )
+            alias_name = m["name"]
+            display_name = m.get("display_name")
+            model_id = m.get("model_id")
+
+            label_parts = [alias_name]
+            if display_name and display_name != alias_name:
+                label_parts.append(f"— {display_name}")
+            if model_id and model_id != alias_name:
+                label_parts.append(f"(ID: {model_id})")
+
+            all_model_labels.append(f"{' '.join(label_parts)}  [{provider_label}]")
         # Default to "phi3" — a fast local Ollama SLM
         _default_model_name = st.session_state.get("selected_model", "phi3")
         _default_idx = all_model_names.index(_default_model_name) if _default_model_name in all_model_names else 0

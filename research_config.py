@@ -55,10 +55,14 @@ MODEL_REGISTRY = [
      "model_id": "llama-3.3-70b-versatile", "params_billions": 70.0,
      "context_window": 128000, "cost_per_1k_input_tokens": 0.00059,
      "cost_per_1k_output_tokens": 0.00079},
+    # NOTE: "groq-mixtral" is kept as a backward-compatible alias; the underlying
+    # model was migrated from the decommissioned mixtral-8x7b-32768 (56 B) to
+    # llama-3.1-8b-instant (8 B) — see https://console.groq.com/docs/deprecations
     {"name": "groq-mixtral", "type": "LLM", "provider": "groq",
      "model_id": "llama-3.1-8b-instant", "params_billions": 8.0,
      "context_window": 131072, "cost_per_1k_input_tokens": 0.00005,
-     "cost_per_1k_output_tokens": 0.00008},
+     "cost_per_1k_output_tokens": 0.00008,
+     "description": "groq-mixtral alias → llama-3.1-8b-instant (Mixtral decommissioned)"},
     {"name": "groq-gemma2", "type": "LLM", "provider": "groq",
      "model_id": "gemma2-9b-it", "params_billions": 9.0,
      "context_window": 8192, "cost_per_1k_input_tokens": 0.00020,
