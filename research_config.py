@@ -85,6 +85,34 @@ ALL_MODELS = [m["name"] for m in MODEL_REGISTRY]
 # Models that are unavailable at runtime are skipped automatically by
 # ResearchEvaluator._is_model_available().
 MODELS_TO_EVALUATE = ALL_MODELS
+
+
+def _validate_model_axes() -> None:
+    """Validate derived model lists used as experiment axes."""
+    expected_all_models = [m["name"] for m in MODEL_REGISTRY]
+    if ALL_MODELS != expected_all_models:
+        raise ValueError(
+            "ALL_MODELS must be the flattened list of all registered model names."
+        )
+
+    if MODELS_TO_EVALUATE != ALL_MODELS:
+        raise ValueError(
+            "MODELS_TO_EVALUATE must include every registered model in ALL_MODELS."
+        )
+
+    if SLM_MODELS and not any(model in MODELS_TO_EVALUATE for model in SLM_MODELS):
+        raise ValueError(
+            "MODELS_TO_EVALUATE must include at least one SLM when SLM models are registered."
+        )
+
+    if LLM_MODELS and not any(model in MODELS_TO_EVALUATE for model in LLM_MODELS):
+        raise ValueError(
+            "MODELS_TO_EVALUATE must include at least one LLM when LLM models are registered."
+        )
+
+
+_validate_model_axes()
+
 RETRIEVAL_MODES = ["vector_only", "bm25_only", "hybrid"]
 
 # ── Per-comparison output files (one file per comparison type) ────────────────
