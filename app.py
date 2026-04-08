@@ -62,9 +62,11 @@ try:
     _MM_IMPORT_OK = True
 except ImportError:
     def multimodal_available() -> bool:
+        """Fallback: multimodal is unavailable when import fails."""
         return False
 
     def image_index_available() -> bool:
+        """Fallback: image index capability is unavailable when import fails."""
         return False
 
     def get_missing_dependencies() -> list:
