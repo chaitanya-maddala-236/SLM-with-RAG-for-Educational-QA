@@ -542,7 +542,7 @@ def _build_llm(model_name: str, temperature: float = 0.1):
     """
     import os as _os
 
-    def _is_configured_secret(value: str) -> bool:
+    def _is_configured_secret(value: str | None) -> bool:
         v = (value or "").strip()
         if not v:
             return False

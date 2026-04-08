@@ -487,9 +487,12 @@ pip install langchain-google-genai
 
 ```bash
 cp .env.example .env
-cat > .env <<'EOF'
+```
+
+Then edit `.env` and set:
+
+```bash
 GROQ_API_KEY=replace_with_your_groq_api_key
-EOF
 ```
 
 To use the `nomic-embed-text` embedding model locally (optional):
