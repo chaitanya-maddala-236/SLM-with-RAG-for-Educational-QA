@@ -130,7 +130,7 @@ def init_session_state() -> None:
     if "selected_embedding" not in st.session_state:
         st.session_state.selected_embedding = DEFAULT_EMBEDDING
     if "selected_model" not in st.session_state:
-        st.session_state.selected_model = "groq-llama3-8b"
+        st.session_state.selected_model = "phi3"
     if "selected_retrieval" not in st.session_state:
         st.session_state.selected_retrieval = "hybrid"
     if "selected_topk" not in st.session_state:
@@ -181,19 +181,45 @@ def render_controls() -> tuple[str, str, int, str, str, bool]:
         st.divider()
         st.subheader("🤖 Model Settings")
 
-        # ── Groq selector ──────────────────────────────────────────────────
-        groq_models = [m["name"] for m in MODEL_REGISTRY if m.get("provider") == "groq"]
-        selected_model = st.selectbox(
-            "Groq Model",
-            groq_models,
-            index=0,
-            help="Requires GROQ_API_KEY set in your environment or .env file.",
-        )
         import os as _os
-        if _is_configured_secret(_os.environ.get("GROQ_API_KEY")):
-            st.success("✅ GROQ_API_KEY is set")
+
+        # ── Unified model selector (SLM via Ollama + LLM via Groq) ────────
+        all_model_names = [m["name"] for m in MODEL_REGISTRY]
+        # Build display labels that show the provider clearly
+        _provider_labels = {
+            "ollama": "🖥️ Ollama (local)",
+            "groq": "☁️ Groq (API)",
+        }
+        all_model_labels = [
+            f"{m['name']}  [{_provider_labels.get(m.get('provider', 'ollama'), m.get('provider', 'ollama'))}]"
+            for m in MODEL_REGISTRY
+        ]
+        # Default to "phi3" — a fast local Ollama SLM
+        _default_model_name = st.session_state.get("selected_model", "phi3")
+        _default_idx = all_model_names.index(_default_model_name) if _default_model_name in all_model_names else 0
+        selected_label = st.selectbox(
+            "Model",
+            all_model_labels,
+            index=_default_idx,
+            help=(
+                "🖥️ Ollama models run locally — start Ollama and pull the model first.\n"
+                "☁️ Groq models use the Groq API — requires GROQ_API_KEY."
+            ),
+        )
+        selected_model = all_model_names[all_model_labels.index(selected_label)]
+
+        # ── Status indicators ──────────────────────────────────────────────
+        _selected_provider = next(
+            (m.get("provider", "ollama") for m in MODEL_REGISTRY if m["name"] == selected_model),
+            "ollama",
+        )
+        if _selected_provider == "groq":
+            if _is_configured_secret(_os.environ.get("GROQ_API_KEY")):
+                st.success("✅ GROQ_API_KEY is set")
+            else:
+                st.warning("⚠️ GROQ_API_KEY not set — Groq queries will fail")
         else:
-            st.warning("⚠️ GROQ_API_KEY not set — queries will fail")
+            st.info("🖥️ Ollama model — make sure Ollama is running locally")
 
         selected_retrieval = st.selectbox(
             "Retrieval Mode",
