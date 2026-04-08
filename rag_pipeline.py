@@ -600,7 +600,7 @@ class RAGPipeline:
             self.llm = _build_llm(model_name, temperature=0.1)
             print(f"[Init] LLM loaded: {model_name}")
         except Exception as exc:
-            fallback_model = "groq-llama3-8b"
+            fallback_model = "phi3"
             print(
                 f"[Init] LLM load failed for '{model_name}': {exc}. "
                 f"Falling back to {fallback_model}."
@@ -611,8 +611,9 @@ class RAGPipeline:
             except Exception as fallback_exc:
                 raise RuntimeError(
                     f"Unable to initialize LLM '{model_name}' or fallback "
-                    f"'{fallback_model}'. Groq-backed models require a valid "
-                    f"GROQ_API_KEY. Original error: {exc}. "
+                    f"'{fallback_model}'. Make sure Ollama is running and "
+                    f"'{fallback_model}' is pulled (`ollama pull {fallback_model}`). "
+                    f"Original error: {exc}. "
                     f"Fallback error: {fallback_exc}"
                 ) from fallback_exc
         self._ctx_builder = ContextualQueryBuilder()
