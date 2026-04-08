@@ -57,6 +57,7 @@ try:
         load_or_build_image_index,
         multimodal_available,
         image_index_available,
+        vision_llm_available,
         get_missing_dependencies,
     )
     _MM_IMPORT_OK = True
@@ -67,6 +68,10 @@ except ImportError:
 
     def image_index_available() -> bool:
         """Fallback: image index capability is unavailable when import fails."""
+        return False
+
+    def vision_llm_available() -> bool:
+        """Fallback: vision LLM capability is unavailable when import fails."""
         return False
 
     def get_missing_dependencies() -> list:
@@ -342,18 +347,28 @@ def render_controls() -> tuple[str, str, int, str, str, bool]:
         st.divider()
         with st.expander("🖼️ Multimodal Status", expanded=False):
             if multimodal_available():
-                if not image_index_available():
-                    st.success("✅ Image input enabled (caption mode)")
+                if vision_llm_available():
+                    st.success("✅ Vision LLM enabled — model can read image content")
                     st.caption(
-                        "Uploaded images are captioned and included as visual context. "
-                        "Install `faiss-cpu` to enable image-index retrieval."
+                        "Upload an image and ask a question. A vision LLM will analyse "
+                        "the image (reading text, labels, diagrams) and the result is "
+                        "fused with retrieved text context to generate an answer.\n\n"
+                        "Vision backend: **Groq** (GROQ_API_KEY set) or "
+                        "**Ollama LLaVA** (local model detected)."
+                    )
+                elif not image_index_available():
+                    st.info("ℹ️ Image input enabled (BLIP caption mode)")
+                    st.caption(
+                        "Uploaded images are described with a short auto-generated caption. "
+                        "For richer image understanding, set `GROQ_API_KEY` (uses "
+                        "`llama-3.2-11b-vision-preview`) or run `ollama pull llava`."
                     )
                 else:
                     st.success("✅ Multimodal enabled (caption + image index)")
                     st.caption(
                         "Upload an image in the chat to query via visual context. "
-                        "To index PDF images run `build_image_index()` from "
-                        "`multimodal_processor.py`."
+                        "Set GROQ_API_KEY or run `ollama pull llava` to enable "
+                        "full vision-LLM image reading."
                     )
             else:
                 missing = get_missing_dependencies()
@@ -503,12 +518,20 @@ def render_right_panel(step_log: list[str], result_meta: dict, metrics: dict) ->
                     if i < len(result_meta["retrieved_docs"]):
                         st.divider()
 
-        # Multimodal: image captions retrieved for this query
+        # Multimodal: image analysis / captions used for this query
         image_captions = result_meta.get("image_captions") or []
         if image_captions:
-            with st.expander("🖼️ Visual Context (Image Captions)", expanded=True):
+            # First caption is typically the vision-LLM analysis (longest);
+            # remaining are indexed-image captions.
+            first_cap = image_captions[0] if image_captions else ""
+            is_vision_analysis = len(first_cap) > 200  # vision analyses are verbose
+            label = "🔬 Vision Analysis (Image Content Read by AI)" if is_vision_analysis else "🖼️ Visual Context (Image Captions)"
+            with st.expander(label, expanded=True):
                 for i, cap in enumerate(image_captions, 1):
-                    st.markdown(f"**Image {i}:** {cap}")
+                    if i == 1 and is_vision_analysis:
+                        st.markdown(cap)
+                    else:
+                        st.markdown(f"**Image {i}:** {cap}")
 
     # ── Evaluation Metrics ─────────────────────────────────────────────────
     if metrics:
