@@ -533,8 +533,13 @@ def fuse_multimodal_context(
 # ── Availability helpers ──────────────────────────────────────────────────────
 
 def multimodal_available() -> bool:
-    """Return True when all optional multimodal dependencies are installed."""
-    return _TRANSFORMERS_AVAILABLE and _PIL_AVAILABLE and _FAISS_AVAILABLE
+    """Return True when uploaded-image multimodal flow is available."""
+    return _TRANSFORMERS_AVAILABLE and _PIL_AVAILABLE
+
+
+def image_index_available() -> bool:
+    """Return True when FAISS-backed image indexing/search is available."""
+    return multimodal_available() and _FAISS_AVAILABLE
 
 
 def get_missing_dependencies() -> list[str]:

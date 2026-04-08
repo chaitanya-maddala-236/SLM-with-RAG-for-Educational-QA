@@ -56,11 +56,17 @@ try:
     from multimodal_processor import (
         load_or_build_image_index,
         multimodal_available,
+        image_index_available,
         get_missing_dependencies,
     )
     _MM_IMPORT_OK = True
 except ImportError:
     def multimodal_available() -> bool:
+        """Fallback: multimodal is unavailable when import fails."""
+        return False
+
+    def image_index_available() -> bool:
+        """Fallback: image index capability is unavailable when import fails."""
         return False
 
     def get_missing_dependencies() -> list:
@@ -336,12 +342,19 @@ def render_controls() -> tuple[str, str, int, str, str, bool]:
         st.divider()
         with st.expander("🖼️ Multimodal Status", expanded=False):
             if multimodal_available():
-                st.success("✅ Multimodal enabled (CLIP + FAISS)")
-                st.caption(
-                    "Upload an image in the chat to query via visual context. "
-                    "To index PDF images run `build_image_index()` from "
-                    "`multimodal_processor.py`."
-                )
+                if not image_index_available():
+                    st.success("✅ Image input enabled (caption mode)")
+                    st.caption(
+                        "Uploaded images are captioned and included as visual context. "
+                        "Install `faiss-cpu` to enable image-index retrieval."
+                    )
+                else:
+                    st.success("✅ Multimodal enabled (caption + image index)")
+                    st.caption(
+                        "Upload an image in the chat to query via visual context. "
+                        "To index PDF images run `build_image_index()` from "
+                        "`multimodal_processor.py`."
+                    )
             else:
                 missing = get_missing_dependencies()
                 st.warning("⚠️ Multimodal not available")
