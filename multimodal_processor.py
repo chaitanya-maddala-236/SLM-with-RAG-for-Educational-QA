@@ -115,7 +115,7 @@ CLIP_DIM = 512
 
 # ── API key validation helper ─────────────────────────────────────────────────
 
-_PLACEHOLDER_MARKERS = ("replace_with", "your_", "example", "placeholder")
+_API_KEY_PLACEHOLDER_MARKERS = ("replace_with", "your_", "example", "placeholder")
 
 
 def _is_api_key_placeholder(key: str) -> bool:
@@ -125,7 +125,7 @@ def _is_api_key_placeholder(key: str) -> bool:
     and ``vision_llm_available()`` so the marker list stays in one place.
     """
     lower = key.lower()
-    return any(marker in lower for marker in _PLACEHOLDER_MARKERS)
+    return any(marker in lower for marker in _API_KEY_PLACEHOLDER_MARKERS)
 
 
 # ── Data class ────────────────────────────────────────────────────────────────
@@ -411,7 +411,7 @@ class VisionImageAnalyzer:
             #   JPEG → \xff\xd8 (default fallback)
             if image_bytes[:4] == b"\x89PNG":
                 img_fmt = "png"
-            elif image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
+            elif len(image_bytes) >= 12 and image_bytes[:4] == b"RIFF" and image_bytes[8:12] == b"WEBP":
                 img_fmt = "webp"
             else:
                 img_fmt = "jpeg"

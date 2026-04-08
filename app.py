@@ -350,7 +350,7 @@ def render_controls() -> tuple[str, str, int, str, str, bool]:
                 if vision_llm_available():
                     st.success("✅ Vision LLM enabled — model can read image content")
                     st.caption(
-                        "Upload an image and ask a question. A vision LLM will analyse "
+                        "Upload an image and ask a question. A vision LLM will analyze "
                         "the image (reading text, labels, diagrams) and the result is "
                         "fused with retrieved text context to generate an answer.\n\n"
                         "Vision backend: **Groq** (GROQ_API_KEY set) or "

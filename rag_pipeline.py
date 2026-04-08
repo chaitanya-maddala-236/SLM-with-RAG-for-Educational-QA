@@ -1164,7 +1164,7 @@ class RAGPipeline:
                 try:
                     result.log(
                         7,
-                        f"Step 7b-i: Analysing image with vision model "
+                        f"Step 7b-i: Analyzing image with vision model "
                         f"({self._vision_analyzer.method}) …",
                     )
                     _vision_analysis = self._vision_analyzer.analyze(
