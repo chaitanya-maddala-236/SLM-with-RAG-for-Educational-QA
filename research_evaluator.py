@@ -45,6 +45,7 @@ from pathlib import Path
 
 import research_config as _rc
 from research_config import (
+    ALL_MODELS,
     MODELS_TO_EVALUATE,
     RETRIEVAL_MODES,
     RESULTS_FILE,
@@ -1749,9 +1750,15 @@ def _parse_args() -> argparse.Namespace:
     )
     parser.add_argument(
         "--model",
-        choices=MODELS_TO_EVALUATE,
+        choices=ALL_MODELS,
         default=MODELS_TO_EVALUATE[0] if MODELS_TO_EVALUATE else "groq-llama3-8b",
-        help="Model to evaluate (default: first Groq model).",
+        help=(
+            "Model to evaluate. Accepts any registered model (Ollama SLMs or "
+            "Groq LLMs). In multi-model comparison modes, unavailable models "
+            "are skipped automatically. In --mode single, availability is not "
+            "pre-checked here and pipeline-specific fallback behavior may apply. "
+            f"(default: {MODELS_TO_EVALUATE[0] if MODELS_TO_EVALUATE else 'groq-llama3-8b'})"
+        ),
     )
     parser.add_argument(
         "--retrieval",

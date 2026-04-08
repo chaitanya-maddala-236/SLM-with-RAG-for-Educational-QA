@@ -74,12 +74,45 @@ MODEL_REGISTRY = [
 SLM_MODELS = [m["name"] for m in MODEL_REGISTRY if m["type"] == "SLM"]
 LLM_MODELS = [m["name"] for m in MODEL_REGISTRY if m["type"] == "LLM"]
 GROQ_MODELS = [m["name"] for m in MODEL_REGISTRY if m.get("provider") == "groq"]
+# ALL_MODELS includes every registered model regardless of provider.
+ALL_MODELS = [m["name"] for m in MODEL_REGISTRY]
 
 # ── Experiment axes ──────────────────────────────────────────────────────────
 
-# MODELS_TO_EVALUATE is Groq-only for API-based research comparison.
-# Groq models require GROQ_API_KEY to be set in the environment.
-MODELS_TO_EVALUATE = GROQ_MODELS
+# MODELS_TO_EVALUATE covers all registered models so that every evaluation
+# mode (model_comparison, token_comparison, slm_vs_llm, full_matrix, …)
+# compares both local Ollama SLMs and Groq API LLMs side-by-side.
+# Models that are unavailable at runtime are skipped automatically by
+# ResearchEvaluator._is_model_available().
+MODELS_TO_EVALUATE = ALL_MODELS
+
+
+def _validate_model_axes() -> None:
+    """Validate derived model lists used as experiment axes."""
+    expected_all_models = [m["name"] for m in MODEL_REGISTRY]
+    if ALL_MODELS != expected_all_models:
+        raise ValueError(
+            "ALL_MODELS must be the flattened list of all registered model names."
+        )
+
+    if MODELS_TO_EVALUATE != ALL_MODELS:
+        raise ValueError(
+            "MODELS_TO_EVALUATE must include every registered model in ALL_MODELS."
+        )
+
+    if SLM_MODELS and not any(model in MODELS_TO_EVALUATE for model in SLM_MODELS):
+        raise ValueError(
+            "MODELS_TO_EVALUATE must include at least one SLM when SLM models are registered."
+        )
+
+    if LLM_MODELS and not any(model in MODELS_TO_EVALUATE for model in LLM_MODELS):
+        raise ValueError(
+            "MODELS_TO_EVALUATE must include at least one LLM when LLM models are registered."
+        )
+
+
+_validate_model_axes()
+
 RETRIEVAL_MODES = ["vector_only", "bm25_only", "hybrid"]
 
 # ── Per-comparison output files (one file per comparison type) ────────────────
