@@ -19,6 +19,14 @@ import datetime
 # Suppress torchvision file-watcher warnings
 os.environ.setdefault("STREAMLIT_SERVER_FILE_WATCHER_TYPE", "none")
 
+
+def _is_configured_secret(value: str | None) -> bool:
+    v = (value or "").strip()
+    if not v:
+        return False
+    lowered = v.lower()
+    return not any(x in lowered for x in ("replace_with", "your_", "example", "placeholder"))
+
 import streamlit as st
 from langchain_community.vectorstores import Chroma
 
@@ -182,7 +190,7 @@ def render_controls() -> tuple[str, str, int, str, str, bool]:
             help="Requires GROQ_API_KEY set in your environment or .env file.",
         )
         import os as _os
-        if _os.environ.get("GROQ_API_KEY"):
+        if _is_configured_secret(_os.environ.get("GROQ_API_KEY")):
             st.success("✅ GROQ_API_KEY is set")
         else:
             st.warning("⚠️ GROQ_API_KEY not set — queries will fail")

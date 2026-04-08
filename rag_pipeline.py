@@ -427,12 +427,13 @@ def _build_multimodal_context_with_budget(
     # ── Caption portion (remaining budget) ────────────────────────────────────
     caption_parts: list[str] = []
     caption_candidates = [
-        rec.caption
-        for rec, _ in image_hits
-        if rec.caption
+        *(additional_captions or []),
+        *[
+            rec.caption
+            for rec, _ in image_hits
+            if rec.caption
+        ],
     ]
-    if additional_captions:
-        caption_candidates.extend(additional_captions)
 
     seen_captions: set[str] = set()
     for raw_caption in caption_candidates:
@@ -541,6 +542,14 @@ def _build_llm(model_name: str, temperature: float = 0.1):
     """
     import os as _os
 
+    def _is_configured_secret(value: str) -> bool:
+        v = (value or "").strip()
+        if not v:
+            return False
+        lowered = v.lower()
+        placeholder_markers = ("replace_with", "your_", "example", "placeholder")
+        return not any(marker in lowered for marker in placeholder_markers)
+
     cfg = next((m for m in MODEL_REGISTRY if m["name"] == model_name), None)
     provider = cfg["provider"] if cfg else "ollama"
     model_id = cfg["model_id"] if cfg else model_name
@@ -552,7 +561,7 @@ def _build_llm(model_name: str, temperature: float = 0.1):
                 "Run: pip install langchain-groq"
             )
         api_key = _os.environ.get("GROQ_API_KEY", "")
-        if not api_key:
+        if not _is_configured_secret(api_key):
             raise ValueError("GROQ_API_KEY environment variable is not set.")
         return _ChatGroq(
             model=model_id,
@@ -596,7 +605,16 @@ class RAGPipeline:
                 f"[Init] LLM load failed for '{model_name}': {exc}. "
                 f"Falling back to {fallback_model}."
             )
-            self.llm = _build_llm(fallback_model, temperature=0.1)
+            try:
+                self.llm = _build_llm(fallback_model, temperature=0.1)
+                print(f"[Init] LLM loaded: {fallback_model}")
+            except Exception as fallback_exc:
+                raise RuntimeError(
+                    f"Unable to initialize LLM '{model_name}' or fallback "
+                    f"'{fallback_model}'. Groq-backed models require a valid "
+                    f"GROQ_API_KEY. Original error: {exc}. "
+                    f"Fallback error: {fallback_exc}"
+                ) from fallback_exc
         self._ctx_builder = ContextualQueryBuilder()
         # Embedding function reused for context-similarity checks
         self._embed_fn = vector_store._embedding_function
@@ -1083,6 +1101,7 @@ class RAGPipeline:
         # SLM context.
         _image_hits: list = []
         uploaded_image_caption: str | None = None
+        uploaded_image_captions: list[str] = []
         if image_input is not None and _MULTIMODAL_AVAILABLE:
             try:
                 import io as _io
@@ -1131,6 +1150,7 @@ class RAGPipeline:
         if uploaded_image_caption:
             if uploaded_image_caption not in result.image_captions:
                 result.image_captions.insert(0, uploaded_image_caption)
+            uploaded_image_captions.append(uploaded_image_caption)
         result.has_image_context = bool(result.image_captions)
 
         # ── Determine retrieval similarity score and pipeline mode ────────────
@@ -1176,7 +1196,7 @@ class RAGPipeline:
                     result.retrieved_docs,
                     _image_hits,
                     self.model_name,
-                    additional_captions=result.image_captions,
+                    additional_captions=uploaded_image_captions,
                 )
                 prompt_text = MULTIMODAL_PROMPT.format(context=context, question=user_query)
                 result.log(
@@ -1198,7 +1218,7 @@ class RAGPipeline:
                     result.retrieved_docs,
                     _image_hits,
                     self.model_name,
-                    additional_captions=result.image_captions,
+                    additional_captions=uploaded_image_captions,
                 )
                 prompt_text = MULTIMODAL_PROMPT.format(context=context, question=user_query)
                 result.log(

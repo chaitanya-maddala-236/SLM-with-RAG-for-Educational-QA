@@ -222,7 +222,7 @@ def _save_bar_chart(
     plt.ylabel(ylabel)
     plt.xticks(rotation=30, ha="right")
     plt.tight_layout()
-    plt.savefig(output_path, dpi=200)
+    plt.savefig(output_path)
     plt.close()
 
 
@@ -249,7 +249,7 @@ def _save_grouped_accuracy_chart(
     plt.title(title)
     plt.legend()
     plt.tight_layout()
-    plt.savefig(output_path, dpi=200)
+    plt.savefig(output_path)
     plt.close()
 
 
@@ -364,7 +364,7 @@ def _build_graphs_for_table(
             plt.ylabel("Topic Accuracy (%)")
             plt.title(f"{base_name} - Latency vs Accuracy")
             plt.tight_layout()
-            plt.savefig(p, dpi=300)
+            plt.savefig(p)
             plt.close()
             created.append(p)
 
@@ -398,7 +398,7 @@ def _build_graphs_for_table(
             plt.title(f"{base_name} - Avg Input vs Output Tokens")
             plt.legend()
             plt.tight_layout()
-            plt.savefig(p, dpi=200)
+            plt.savefig(p)
             plt.close()
             created.append(p)
 

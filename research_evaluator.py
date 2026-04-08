@@ -78,6 +78,14 @@ from topic_memory_manager import TopicMemoryManager
 MIN_ACCURACY: float = 0.0  # Threshold constant — not a table value
 
 
+def _is_configured_secret(value: str | None) -> bool:
+    v = (value or "").strip()
+    if not v:
+        return False
+    lowered = v.lower()
+    return not any(x in lowered for x in ("replace_with", "your_", "example", "placeholder"))
+
+
 def get_model_config(model: str) -> dict | None:
     """Return metadata for *model* sourced from research_config.MODEL_REGISTRY.
 
@@ -196,7 +204,7 @@ class ResearchEvaluator:
         cfg = get_model_config(model_name) or {}
         provider = cfg.get("provider", "ollama")
         if provider == "groq":
-            return bool(_os.environ.get("GROQ_API_KEY", ""))
+            return _is_configured_secret(_os.environ.get("GROQ_API_KEY", ""))
         # Default: Ollama — check ollama list
         try:
             proc = subprocess.run(
@@ -338,9 +346,11 @@ class ResearchEvaluator:
 
         # Estimated cost derived from MODEL_REGISTRY rates (0.0 for local models)
         cfg = get_model_config(self.model) or {}
+        input_rate = cfg.get("input_cost_per_1k", cfg.get("cost_per_1k_input_tokens", 0.0))
+        output_rate = cfg.get("output_cost_per_1k", cfg.get("cost_per_1k_output_tokens", 0.0))
         estimated_cost_usd: float = (
-            input_tokens * cfg.get("input_cost_per_1k", 0.0) / 1000.0
-            + output_tokens * cfg.get("output_cost_per_1k", 0.0) / 1000.0
+            input_tokens * input_rate / 1000.0
+            + output_tokens * output_rate / 1000.0
         )
         faithfulness = float(result.metrics.get("Faithfulness", 0.0))
         hallucination_rate = max(0.0, min(1.0, 1.0 - faithfulness))

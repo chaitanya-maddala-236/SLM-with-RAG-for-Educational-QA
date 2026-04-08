@@ -486,7 +486,10 @@ pip install langchain-google-genai
 ### Step 3 — Configure Groq API key
 
 ```bash
-echo "GROQ_API_KEY=replace_with_your_groq_api_key" >> .env
+cp .env.example .env
+cat > .env <<'EOF'
+GROQ_API_KEY=replace_with_your_groq_api_key
+EOF
 ```
 
 To use the `nomic-embed-text` embedding model locally (optional):
