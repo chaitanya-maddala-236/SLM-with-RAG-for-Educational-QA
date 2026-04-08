@@ -339,7 +339,6 @@ def render_controls() -> tuple[str, str, int, str, str, bool]:
         # Multimodal status
         st.divider()
         with st.expander("🖼️ Multimodal Status", expanded=False):
-            missing = get_missing_dependencies()
             if multimodal_available():
                 if not image_index_available():
                     st.success("✅ Image input enabled (caption mode)")
@@ -355,6 +354,7 @@ def render_controls() -> tuple[str, str, int, str, str, bool]:
                         "`multimodal_processor.py`."
                     )
             else:
+                missing = get_missing_dependencies()
                 st.warning("⚠️ Multimodal not available")
                 st.caption("Missing: " + ", ".join(missing))
 

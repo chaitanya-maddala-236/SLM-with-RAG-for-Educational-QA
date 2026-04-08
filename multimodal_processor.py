@@ -539,7 +539,7 @@ def multimodal_available() -> bool:
 
 def image_index_available() -> bool:
     """Return True when FAISS-backed image indexing/search is available."""
-    return _FAISS_AVAILABLE
+    return multimodal_available() and _FAISS_AVAILABLE
 
 
 def get_missing_dependencies() -> list[str]:
