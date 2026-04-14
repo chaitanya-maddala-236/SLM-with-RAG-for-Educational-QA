@@ -114,9 +114,9 @@ from data_loader import get_texts_and_metadatas
 from research_config import MODEL_REGISTRY
 
 try:
-    MULTIMODAL_MIN_WORDS = str(int(os.environ.get("MULTIMODAL_MIN_WORDS", "700")))
+    MULTIMODAL_MIN_WORDS_INT = int(os.environ.get("MULTIMODAL_MIN_WORDS", "700"))
 except ValueError:
-    MULTIMODAL_MIN_WORDS = "700"
+    MULTIMODAL_MIN_WORDS_INT = 700
 
 # ── Multimodal extension (optional; degrades gracefully when deps are absent) ─
 try:
@@ -233,7 +233,7 @@ Your task:
 Generate a detailed, structured, and faithful answer.
 
 STRICT REQUIREMENTS:
-- Minimum {MULTIMODAL_MIN_WORDS} words (target range: 700–1000 words)
+- Minimum {MULTIMODAL_MIN_WORDS_INT} words (target range: 700–1000 words)
 - Do NOT hallucinate
 - Only use provided context
 - If missing info, explicitly say "Not found in context"

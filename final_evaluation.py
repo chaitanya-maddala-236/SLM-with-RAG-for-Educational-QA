@@ -107,7 +107,7 @@ def evaluate_results(df: "pd.DataFrame") -> "pd.DataFrame":
     for col in METRIC_COLUMNS:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
-    all_zero_cost = bool((out["cost_per_query"] <= EPSILON).all())
+    all_zero_cost = (out["cost_per_query"] <= EPSILON).all()
     if all_zero_cost:
         out["cost_efficiency"] = 1.0
         effective_cost_weight = 0.0
