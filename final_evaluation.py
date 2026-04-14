@@ -75,7 +75,7 @@ def _parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
-def _load_metrics(path: Path) -> pd.DataFrame:
+def _load_metrics(path: Path) -> "pd.DataFrame":
     pd = _require_pandas()
 
     if not path.exists():
@@ -101,6 +101,7 @@ def _load_metrics(path: Path) -> pd.DataFrame:
 
 
 def evaluate_results(df: "pd.DataFrame") -> "pd.DataFrame":
+    pd = _require_pandas()
     out = df.copy()
     for col in METRIC_COLUMNS:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)

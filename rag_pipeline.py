@@ -22,6 +22,7 @@ transparent from the command line and the Streamlit sidebar.
 from __future__ import annotations
 
 import re
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -217,7 +218,7 @@ Answer:""",
 # captions.  Downstream grounding and evaluation logic work identically.
 MULTIMODAL_PROMPT = PromptTemplate(
     input_variables=["context", "question"],
-    template="""You are an AI research assistant specialized in multimodal reasoning.
+    template=f"""You are an AI research assistant specialized in multimodal reasoning.
 
 You are given:
 1. Retrieved TEXT context
@@ -227,7 +228,7 @@ Your task:
 Generate a detailed, structured, and faithful answer.
 
 STRICT REQUIREMENTS:
-- Minimum 700 words (target range: 700–1000 words)
+- Minimum {os.environ.get("MULTIMODAL_MIN_WORDS", "700")} words (target range: 700–1000 words)
 - Do NOT hallucinate
 - Only use provided context
 - If missing info, explicitly say "Not found in context"

@@ -137,12 +137,14 @@ DEFAULT_MULTIMODAL_EMBEDDING_NAME = os.environ.get(
 ).strip().lower() or "clip"
 
 # Embedding dimension fallback for legacy callers
-CLIP_DIM = int(
-    MULTIMODAL_EMBEDDING_REGISTRY.get(
-        DEFAULT_MULTIMODAL_EMBEDDING_NAME,
-        MULTIMODAL_EMBEDDING_REGISTRY["clip"],
-    )["dimension"]
-)
+_default_mm_cfg = MULTIMODAL_EMBEDDING_REGISTRY.get(DEFAULT_MULTIMODAL_EMBEDDING_NAME)
+if _default_mm_cfg is None:
+    print(
+        f"  [MM Embedding] Warning: unknown MULTIMODAL_EMBEDDING_MODEL="
+        f"'{DEFAULT_MULTIMODAL_EMBEDDING_NAME}', defaulting to 'clip'."
+    )
+    _default_mm_cfg = MULTIMODAL_EMBEDDING_REGISTRY.get("clip", {"dimension": 512})
+CLIP_DIM = int(_default_mm_cfg.get("dimension", 512))
 
 # ── API key validation helper ─────────────────────────────────────────────────
 
