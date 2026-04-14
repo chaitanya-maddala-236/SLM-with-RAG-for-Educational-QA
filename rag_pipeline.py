@@ -113,6 +113,8 @@ from evaluation import compute_all_metrics
 from data_loader import get_texts_and_metadatas
 from research_config import MODEL_REGISTRY
 
+MULTIMODAL_MIN_WORDS = os.environ.get("MULTIMODAL_MIN_WORDS", "700")
+
 # ── Multimodal extension (optional; degrades gracefully when deps are absent) ─
 try:
     from multimodal_processor import (
@@ -228,7 +230,7 @@ Your task:
 Generate a detailed, structured, and faithful answer.
 
 STRICT REQUIREMENTS:
-- Minimum {os.environ.get("MULTIMODAL_MIN_WORDS", "700")} words (target range: 700–1000 words)
+- Minimum {MULTIMODAL_MIN_WORDS} words (target range: 700–1000 words)
 - Do NOT hallucinate
 - Only use provided context
 - If missing info, explicitly say "Not found in context"

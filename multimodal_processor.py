@@ -38,6 +38,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
@@ -139,9 +140,11 @@ DEFAULT_MULTIMODAL_EMBEDDING_NAME = os.environ.get(
 # Embedding dimension fallback for legacy callers
 _default_mm_cfg = MULTIMODAL_EMBEDDING_REGISTRY.get(DEFAULT_MULTIMODAL_EMBEDDING_NAME)
 if _default_mm_cfg is None:
-    print(
-        f"  [MM Embedding] Warning: unknown MULTIMODAL_EMBEDDING_MODEL="
-        f"'{DEFAULT_MULTIMODAL_EMBEDDING_NAME}', defaulting to 'clip'."
+    warnings.warn(
+        "Unknown MULTIMODAL_EMBEDDING_MODEL="
+        f"'{DEFAULT_MULTIMODAL_EMBEDDING_NAME}', defaulting to 'clip'.",
+        UserWarning,
+        stacklevel=2,
     )
     _default_mm_cfg = MULTIMODAL_EMBEDDING_REGISTRY.get("clip", {"dimension": 512})
 CLIP_DIM = int(_default_mm_cfg.get("dimension", 512))

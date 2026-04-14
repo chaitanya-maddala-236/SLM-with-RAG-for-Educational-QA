@@ -34,6 +34,7 @@ METRIC_COLUMNS = [
     "context_recall",
     "cost_per_query",
 ]
+# Small floor value used to avoid divide-by-zero in cost normalization.
 EPSILON = 1e-9
 FAITHFULNESS_WEIGHT = 0.28
 ANSWER_RELEVANCE_WEIGHT = 0.24
