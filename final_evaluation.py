@@ -34,6 +34,28 @@ METRIC_COLUMNS = [
     "context_recall",
     "cost_per_query",
 ]
+EPSILON = 1e-9
+FAITHFULNESS_WEIGHT = 0.28
+ANSWER_RELEVANCE_WEIGHT = 0.24
+CONTEXT_PRECISION_WEIGHT = 0.18
+CONTEXT_RECALL_WEIGHT = 0.15
+COST_EFFICIENCY_WEIGHT = 0.15
+OUTPUT_TOKEN_WEIGHT = 0.05
+
+_PD = None
+
+
+def _require_pandas():
+    global _PD
+    if _PD is None:
+        try:
+            import pandas as pd
+        except ImportError as exc:
+            raise ImportError(
+                "pandas is required for final evaluation. Install with: pip install pandas"
+            ) from exc
+        _PD = pd
+    return _PD
 
 
 def _parse_args() -> argparse.Namespace:
@@ -54,12 +76,7 @@ def _parse_args() -> argparse.Namespace:
 
 
 def _load_metrics(path: Path) -> pd.DataFrame:
-    try:
-        import pandas as pd
-    except ImportError as exc:
-        raise ImportError(
-            "pandas is required for final evaluation. Install with: pip install pandas"
-        ) from exc
+    pd = _require_pandas()
 
     if not path.exists():
         raise FileNotFoundError(
@@ -84,32 +101,30 @@ def _load_metrics(path: Path) -> pd.DataFrame:
 
 
 def evaluate_results(df: "pd.DataFrame") -> "pd.DataFrame":
-    import pandas as pd
-
     out = df.copy()
     for col in METRIC_COLUMNS:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
-    min_cost = max(out["cost_per_query"].min(), 1e-9)
-    out["cost_efficiency"] = min_cost / out["cost_per_query"].clip(lower=1e-9)
+    min_cost = max(out["cost_per_query"].min(), EPSILON)
+    out["cost_efficiency"] = min_cost / out["cost_per_query"].clip(lower=EPSILON)
 
     if "avg_output_tokens" in out.columns:
         out["avg_output_tokens"] = pd.to_numeric(
             out["avg_output_tokens"], errors="coerce"
         ).fillna(0.0)
-        max_out = max(out["avg_output_tokens"].max(), 1e-9)
+        max_out = max(out["avg_output_tokens"].max(), EPSILON)
         out["output_token_score"] = out["avg_output_tokens"] / max_out
-        token_weight = 0.05
+        token_weight = OUTPUT_TOKEN_WEIGHT
     else:
         out["output_token_score"] = 0.0
         token_weight = 0.0
 
     out["final_score"] = (
-        0.28 * out["faithfulness"]
-        + 0.24 * out["answer_relevance"]
-        + 0.18 * out["context_precision"]
-        + 0.15 * out["context_recall"]
-        + 0.15 * out["cost_efficiency"]
+        FAITHFULNESS_WEIGHT * out["faithfulness"]
+        + ANSWER_RELEVANCE_WEIGHT * out["answer_relevance"]
+        + CONTEXT_PRECISION_WEIGHT * out["context_precision"]
+        + CONTEXT_RECALL_WEIGHT * out["context_recall"]
+        + COST_EFFICIENCY_WEIGHT * out["cost_efficiency"]
         + token_weight * out["output_token_score"]
     )
     return out.sort_values(by="final_score", ascending=False).reset_index(drop=True)
@@ -166,12 +181,7 @@ def _save_graphs(df: "pd.DataFrame", output_dir: Path) -> None:
 
 def main() -> None:
     args = _parse_args()
-    try:
-        import pandas as pd  # noqa: F401
-    except ImportError as exc:
-        raise ImportError(
-            "pandas is required for final evaluation. Install with: pip install pandas"
-        ) from exc
+    _require_pandas()
 
     input_path = Path(args.input)
     output_dir = Path(args.output_dir)

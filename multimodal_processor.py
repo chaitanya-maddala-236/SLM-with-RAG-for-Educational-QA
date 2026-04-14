@@ -198,6 +198,7 @@ class CLIPEmbedder:
                 "Install with: pip install Pillow"
             )
         selected_name = DEFAULT_MULTIMODAL_EMBEDDING_NAME
+        self._selected_name = selected_name
         cfg = MULTIMODAL_EMBEDDING_REGISTRY.get(selected_name)
         if cfg:
             model_id = cfg["model_id"]
@@ -221,8 +222,15 @@ class CLIPEmbedder:
         return self._dim
 
     def _infer_dimension(self) -> int:
-        """Infer embedding dimensionality with a lightweight forward pass."""
+        """Infer embedding dimensionality from config metadata with safe fallback."""
+        cfg = MULTIMODAL_EMBEDDING_REGISTRY.get(self._selected_name)
+        if cfg:
+            return int(cfg["dimension"])
         if not _PIL_AVAILABLE:
+            print(
+                "  [MM Embedding] Warning: Pillow unavailable and embedding config "
+                "not found; falling back to default CLIP dimension."
+            )
             return CLIP_DIM
         try:
             sample = _PILImage.new("RGB", (32, 32), color=(255, 255, 255))

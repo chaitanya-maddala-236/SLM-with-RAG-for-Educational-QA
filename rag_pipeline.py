@@ -227,7 +227,7 @@ Your task:
 Generate a detailed, structured, and faithful answer.
 
 STRICT REQUIREMENTS:
-- Minimum 700–1000 words
+- Minimum 700 words (target range: 700–1000 words)
 - Do NOT hallucinate
 - Only use provided context
 - If missing info, explicitly say "Not found in context"
