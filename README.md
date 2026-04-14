@@ -4,10 +4,13 @@
 
 A research-grade **Retrieval-Augmented Generation (RAG)** system for educational question answering using Small Language Models (SLMs) and API-hosted LLMs. It handles multi-turn conversations, resolves pronouns and ambiguous follow-ups, detects topic shifts, and falls back gracefully when a question is out of scope.
 
-> **Important (current setup):** the repository is configured for **Groq-only API model evaluation**. Set `GROQ_API_KEY` in `.env` before running app/evaluations.
+> **Important (current setup):** the repository supports Ollama, Groq, OpenAI, Anthropic, and Google model providers. Set only the API keys you need in `.env`.
 
 ```bash
-GROQ_API_KEY=replace_with_your_groq_api_key
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+GOOGLE_API_KEY=...
+GROQ_API_KEY=...
 ```
 
 ### ✅ Latest reliability/testing updates
@@ -188,20 +191,31 @@ Each document carries structured metadata used for retrieval filtering:
 
 All models are registered in `MODEL_REGISTRY` in `research_config.py`.
 
-### Groq API models (active for evaluation)
+### 🧠 SLMs (Small Language Models)
 
-| Model Key | Provider | Input / 1K tokens | Output / 1K tokens |
-|---|---|---|---|
-| `groq-llama3-8b` | Groq | $0.00005 | $0.00008 |
-| `groq-llama3-70b` | Groq | $0.00059 | $0.00079 |
-| `groq-mixtral` | Groq | $0.00024 | $0.00024 |
-| `groq-gemma2` | Groq | $0.00020 | $0.00020 |
+- `phi3` / `phi3-mini` (Phi-3 Mini)
+- `gemma2` (Gemma 2B)
+- `tinyllama`
+- `mistral` / `mistral-7b-instruct`
 
-> **Default evaluation model:** `groq-llama3-8b`
->
-> Required environment variable: `GROQ_API_KEY`
->
-> `MODELS_TO_EVALUATE` is Groq-only by default.
+### 🧠 Open-Source LLMs
+
+- `llama3-8b`
+- `llama3-70b`
+- `mixtral-8x7b`
+- `qwen2.5-7b`
+- `deepseek-llm`
+
+### 🧠 Commercial API LLMs
+
+- `gpt-4o` (OpenAI)
+- `claude-3.5-sonnet` (Anthropic)
+- `gemini-1.5-pro` (Google)
+
+### 🖼️ Vision / Multimodal
+
+- Vision model: **LLaVA** (Ollama fallback in vision analyzer)
+- API vision path: Groq vision (`llama-3.2-11b-vision-preview`)
 
 ---
 
@@ -222,6 +236,8 @@ All embeddings are defined in `EMBEDDING_MODELS` in `research_config.py`. Each e
 | `e5-base` | `intfloat/e5-base-v2` | 768 | HuggingFace | E5 Base — instruction-tuned, larger |
 | `nomic-embed-text` | `nomic-embed-text` | 768 | Ollama | **Benchmark model** — high quality, local |
 | `text-embedding-3-large` | `text-embedding-3-large` | 3072 | OpenAI API | **Benchmark model** — state-of-the-art |
+| `siglip` | `google/siglip-base-patch16-224` | 768 | HuggingFace | **Primary multimodal option** — improved alignment/accuracy |
+| `openclip` | `laion/CLIP-ViT-B-32-laion2B-s34B-b79K` | 512 | HuggingFace | **Alternative multimodal option** — flexible pretrained variants |
 
 > `nomic-embed-text` requires: `ollama pull nomic-embed-text`  
 > `text-embedding-3-large` requires: `OPENAI_API_KEY`
@@ -483,16 +499,24 @@ pip install langchain-anthropic
 pip install langchain-google-genai
 ```
 
-### Step 3 — Configure Groq API key
+### Step 3 — Configure environment variables
 
 ```bash
 cp .env.example .env
 ```
 
-Then edit `.env` and set:
+Then edit `.env` and set the APIs/models you want to benchmark:
 
 ```bash
-GROQ_API_KEY=replace_with_your_groq_api_key
+OPENAI_API_KEY=...
+ANTHROPIC_API_KEY=...
+GOOGLE_API_KEY=...
+GROQ_API_KEY=...
+DEFAULT_SLM=mistral-7b-instruct
+DEFAULT_OPEN_MODEL=llama3-8b
+DEFAULT_API_MODEL=gpt-4o
+MULTIMODAL_EMBEDDING_MODEL=siglip
+MAX_TOKENS=2048
 ```
 
 To use the `nomic-embed-text` embedding model locally (optional):
@@ -501,10 +525,10 @@ To use the `nomic-embed-text` embedding model locally (optional):
 ollama pull nomic-embed-text
 ```
 
-### Step 4 — Verify Groq key is loaded
+### Step 4 — Verify keys are loaded
 
 ```bash
-python -c "import os; print('GROQ_API_KEY set:', bool(os.environ.get('GROQ_API_KEY')))"
+python -c "import os; print('OPENAI', bool(os.environ.get('OPENAI_API_KEY')), 'ANTHROPIC', bool(os.environ.get('ANTHROPIC_API_KEY')), 'GOOGLE', bool(os.environ.get('GOOGLE_API_KEY')), 'GROQ', bool(os.environ.get('GROQ_API_KEY')))"
 ```
 
 ### Step 5 — Verify corpus stats
@@ -578,16 +602,16 @@ All experiments are run via `research_evaluator.py` with the `--mode` flag.
 
 ### Single Model Experiment
 
-Run one Groq model with the default embedding:
+Run one model with the default embedding:
 
 ```bash
-python research_evaluator.py --mode single --model groq-llama3-8b
+python research_evaluator.py --mode single --model mistral-7b-instruct
 ```
 
 With a different embedding:
 
 ```bash
-python research_evaluator.py --mode single --model groq-llama3-8b --embedding bge-base
+python research_evaluator.py --mode single --model llama3-8b --embedding siglip
 ```
 
 ### Retrieval Ablation Study
@@ -600,7 +624,7 @@ python research_evaluator.py --mode ablation --model groq-llama3-8b
 
 ### Model Comparison
 
-Run all Groq models in `MODEL_REGISTRY` with the same retrieval mode and embedding:
+Run all available models in `MODEL_REGISTRY` with the same retrieval mode and embedding:
 
 ```bash
 python research_evaluator.py --mode model_comparison --retrieval hybrid
@@ -608,15 +632,15 @@ python research_evaluator.py --mode model_comparison --retrieval hybrid
 
 ### Embedding Comparison
 
-Run the same Groq model across all embedding models:
+Run the same model across all embedding models:
 
 ```bash
-python research_evaluator.py --mode embedding_comparison --model groq-llama3-8b
+python research_evaluator.py --mode embedding_comparison --model mistral-7b-instruct
 ```
 
 ### Full Matrix
 
-Run every Groq model × every embedding combination:
+Run every available model × every embedding combination:
 
 ```bash
 python research_evaluator.py --mode full_matrix
@@ -632,7 +656,7 @@ python research_evaluator.py --mode token_comparison
 
 ### SLM vs. LLM Comparison
 
-Compare model groups based on registry type (with Groq models active):
+Compare model groups based on registry type (SLMs vs LLMs):
 
 ```bash
 python research_evaluator.py --mode slm_vs_llm
@@ -677,6 +701,45 @@ python evaluation_graphs/generate_evaluation_graphs.py \
 ```
 
 Graphs are saved to `evaluation_graphs/output/`.
+
+### Final Evaluation Script (table + graphs)
+
+Create a CSV/JSON containing:
+- `model`
+- `faithfulness`
+- `answer_relevance`
+- `context_precision`
+- `context_recall`
+- `cost_per_query`
+- optional `avg_output_tokens`
+
+Run:
+
+```bash
+python final_evaluation.py --input results/final_metrics.csv
+```
+
+Outputs:
+- `results/final_evaluation/final_evaluation_results.csv`
+- `results/final_evaluation/final_score_by_model.png`
+- `results/final_evaluation/metrics_by_model.png`
+- `results/final_evaluation/cost_per_query_by_model.png`
+
+### Multimodal Master Prompt (SLM-optimized)
+
+The multimodal answer prompt is configured in `rag_pipeline.py` (`MULTIMODAL_PROMPT`) and is designed to:
+- force long, structured responses (700–1000 words),
+- maximize faithfulness to retrieved text/image context,
+- explicitly report missing information as **"Not found in context"**,
+- improve output-token depth for SLMs.
+
+### Strategy to maximize output tokens with high SLM metrics
+
+1. Use `siglip` first for multimodal retrieval quality, and benchmark `openclip`.
+2. Keep retrieval mode `hybrid` with clean top-K context.
+3. Use structured prompts with sections (Final Answer, Evidence, Explanation, Multimodal Insight, Limitations).
+4. Keep `MAX_TOKENS` high (2048+) and avoid overly short prompts.
+5. Track token output and quality jointly in `final_evaluation.py`.
 
 ---
 
