@@ -124,8 +124,7 @@ Tagged logs include query transformations, selected mode, token usage, latency, 
 
 **Architecture figure description:** Figure A should depict UI input flowing into memory+rewrite modules, then retrieval/reranking, then generation and evaluation output; arrows should label data objects (query, rewritten query, candidates, final answer, metrics).
 
-**Retrieval flow figure description:** Figure B should show parallel BM25 and dense branches merged by weighted fusion, followed by reranking and top-
-\(k\) selection.
+**Retrieval flow figure description:** Figure B should show parallel BM25 and dense branches merged by weighted fusion, followed by reranking and top-\(k\) selection.
 
 ---
 
@@ -137,7 +136,11 @@ For query \(q\) and document \(d\):
 \[
 S_{\mathrm{BM25}}(q,d)=\sum_{t\in q} \mathrm{IDF}(t) \cdot \frac{f(t,d)(k_1+1)}{f(t,d)+k_1\left(1-b+b\frac{|d|}{\overline{|d|}}\right)}
 \]
-where \(f(t,d)\) is term frequency, \(|d|\) document length, \(\overline{|d|}\) average document length, and \(k_1,b\) are BM25 hyperparameters.
+with
+\[
+\mathrm{IDF}(t)=\log\!\left(\frac{N-n(t)+0.5}{n(t)+0.5}\right)
+\]
+where \(N\) is corpus size, \(n(t)\) is the number of documents containing term \(t\), \(f(t,d)\) is term frequency, \(|d|\) document length, \(\overline{|d|}\) average document length, and \(k_1,b\) are BM25 hyperparameters.
 
 ## 7.2 Dense retrieval scoring
 
@@ -166,17 +169,20 @@ A simplified policy:
 \[
 \text{mode}=\begin{cases}
 \mathrm{RAG}, & n_{\mathrm{ctx}}\ge k \land c\ge\tau_h\\
-\mathrm{Partial\ RAG}, & 0<n_{\mathrm{ctx}}<k\ \lor\ \tau_l\le c<\tau_h\\
-\mathrm{LLM\ Fallback}, & n_{\mathrm{ctx}}=0\ \lor\ c<\tau_l
+\mathrm{Partial\ RAG}, & 0<n_{\mathrm{ctx}}<k \land c\ge\tau_l\\
+\mathrm{LLM\ Fallback}, & \text{otherwise}
 \end{cases}
 \]
 where \(n_{\mathrm{ctx}}\) is retrieved context count and \(c\) confidence.
+Conditions are mutually exclusive by construction.
 
 ## 7.6 Complexity and efficiency discussion
 
-- Indexing: BM25 \(O(N\bar{L})\), vector indexing depends on backend but generally \(O(Nd)\) embedding + storage.
-- Query-time: BM25 roughly \(O(|q|\log N)\)-like in practice; dense retrieval depends on ANN/index strategy.
+- Indexing: BM25 \(O(N\bar{L})\), vector indexing depends on backend but generally \(O(Nd_{emb})\) embedding + storage.
+- Query-time: complexity varies by index implementation; practical inverted-index BM25 search is typically sublinear in \(N\), while dense retrieval depends on ANN/index strategy.
 - Hybrid: additive retrieval cost plus reranking cost \(O(k^2)\) worst-case for MMR-like diversification.
+
+Here, \(\bar{L}\) is average document length in tokens/terms and \(d_{emb}\) is embedding dimensionality.
 
 ---
 
@@ -226,6 +232,7 @@ Hallucination rate is operationalized as:
 \[
 \mathrm{Hallucination\ Rate}=1-\mathrm{Faithfulness}
 \]
+Faithfulness is measured as answer-context grounding overlap (token-overlap proxy in the core evaluator and optional RAGAS faithfulness when available), normalized to \([0,1]\).
 Latency is measured as end-to-end query wall-clock milliseconds, and cost is estimated from input/output token counts and per-model pricing.
 
 ## 9.2 Benchmark design
@@ -483,7 +490,34 @@ S_{\mathrm{hybrid}}(q,d)=\alpha\,S_{\mathrm{dense}}(q,d)+(1-\alpha)\,S_{\mathrm{
 \mathrm{Hallucination\ Rate}=1-\mathrm{Faithfulness}
 \]
 
-**Symbol glossary:** \(q\): query, \(d\): document, \(R_k\): retrieved top-\(k\), \(G\): relevant set, \(\alpha\): fusion weight, \(\lambda\): MMR trade-off, \(N\): corpus size, \(d\): embedding dimension.
+**Symbol glossary:**
+
+| Symbol | Meaning |
+|---|---|
+| \(q\) | Query |
+| \(d\) | Document |
+| \(t\) | Term |
+| \(k\) | Top-\(k\) cut-off |
+| \(R_k\) | Retrieved top-\(k\) set |
+| \(G\) | Relevant set |
+| \(\mathbf{e}_q\), \(\mathbf{e}_d\) | Query/document embeddings |
+| \(S\) | Already-selected document set in MMR |
+| \(\alpha\) | Hybrid fusion weight |
+| \(\lambda\) | MMR relevance-diversity weight |
+| \(N\) | Corpus size |
+| \(n(t)\) | Document frequency of term \(t\) |
+| \(f(t,d)\) | Term frequency |
+| \(|d|\) | Document length |
+| \(\overline{|d|}\) | Average document length (BM25 normalization) |
+| \(\bar{L}\) | Average document length in tokens/terms (complexity notation) |
+| \(k_1,b\) | BM25 hyperparameters |
+| \(d_{emb}\) | Embedding dimension |
+| \(rel_i\) | Graded relevance at rank \(i\) |
+| \(n_{\mathrm{ctx}}\) | Retrieved context count |
+| \(\tau_h,\tau_l\) | Confidence thresholds |
+| \(c\) | Retrieval confidence |
+
+Note: \(k\) (retrieval cut-off) and \(k_1\) (BM25 saturation parameter) are unrelated symbols. \(\overline{|d|}\) is used in BM25 normalization, while \(\bar{L}\) is used in complexity notation; both denote average length under different analytical contexts.
 
 ---
 
