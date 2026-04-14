@@ -22,6 +22,7 @@ transparent from the command line and the Streamlit sidebar.
 from __future__ import annotations
 
 import re
+import os
 from dataclasses import dataclass, field
 
 import numpy as np
@@ -45,6 +46,27 @@ _GROQ_AVAILABLE = False
 try:
     from langchain_groq import ChatGroq as _ChatGroq  # type: ignore[import]
     _GROQ_AVAILABLE = True
+except ImportError:
+    pass
+
+_OPENAI_AVAILABLE = False
+try:
+    from langchain_openai import ChatOpenAI as _ChatOpenAI  # type: ignore[import]
+    _OPENAI_AVAILABLE = True
+except ImportError:
+    pass
+
+_ANTHROPIC_AVAILABLE = False
+try:
+    from langchain_anthropic import ChatAnthropic as _ChatAnthropic  # type: ignore[import]
+    _ANTHROPIC_AVAILABLE = True
+except ImportError:
+    pass
+
+_GOOGLE_AVAILABLE = False
+try:
+    from langchain_google_genai import ChatGoogleGenerativeAI as _ChatGoogleGenerativeAI  # type: ignore[import]
+    _GOOGLE_AVAILABLE = True
 except ImportError:
     pass
 
@@ -90,6 +112,11 @@ from retriever import (
 from evaluation import compute_all_metrics
 from data_loader import get_texts_and_metadatas
 from research_config import MODEL_REGISTRY
+
+try:
+    MULTIMODAL_MIN_WORDS_INT = int(os.environ.get("MULTIMODAL_MIN_WORDS", "700"))
+except ValueError:
+    MULTIMODAL_MIN_WORDS_INT = 700
 
 # ── Multimodal extension (optional; degrades gracefully when deps are absent) ─
 try:
@@ -196,11 +223,42 @@ Answer:""",
 # captions.  Downstream grounding and evaluation logic work identically.
 MULTIMODAL_PROMPT = PromptTemplate(
     input_variables=["context", "question"],
-    template="""You are a helpful educational assistant for students.
-Use ONLY the context below (which includes both text and descriptions of relevant
-diagrams or images) to answer the question.
-If the context does not contain enough information, say so clearly.
-Keep your answer concise and suitable for the student's level.
+    template=f"""You are an AI research assistant specialized in multimodal reasoning.
+
+You are given:
+1. Retrieved TEXT context
+2. Retrieved IMAGE descriptions (generated from vision model)
+
+Your task:
+Generate a detailed, structured, and faithful answer.
+
+STRICT REQUIREMENTS:
+- Minimum {MULTIMODAL_MIN_WORDS_INT} words (target range: 700–1000 words)
+- Do NOT hallucinate
+- Only use provided context
+- If missing info, explicitly say "Not found in context"
+- Expand explanations deeply
+
+STRUCTURE:
+1. Final Answer
+   - Direct answer to the query.
+2. Supporting Evidence
+   - Quote relevant text chunks.
+   - Reference image descriptions.
+3. Detailed Explanation
+   - Explain concepts step-by-step.
+   - Add reasoning.
+4. Multimodal Insight
+   - Explain how image + text together support answer.
+5. Limitations
+   - Mention missing or uncertain information.
+
+SELF-CHECK:
+After writing, verify:
+- Is the answer grounded in context?
+- Can it be expanded with more context-grounded detail?
+
+If yes, continue writing before stopping.
 
 Context:
 {context}
@@ -566,6 +624,9 @@ def _build_llm(model_name: str, temperature: float = 0.1):
     Looks up the model in MODEL_REGISTRY to determine the provider:
       - ``ollama``    → OllamaLLM (local, no API key needed)
       - ``groq``      → ChatGroq (requires GROQ_API_KEY)
+      - ``openai``    → ChatOpenAI (requires OPENAI_API_KEY)
+      - ``anthropic`` → ChatAnthropic (requires ANTHROPIC_API_KEY)
+      - ``google``    → ChatGoogleGenerativeAI (requires GOOGLE_API_KEY)
 
     Falls back to OllamaLLM for any unknown provider.
 
@@ -608,6 +669,51 @@ def _build_llm(model_name: str, temperature: float = 0.1):
             model=model_id,
             temperature=temperature,
             api_key=api_key,
+        )
+
+    if provider == "openai":
+        if not _OPENAI_AVAILABLE:
+            raise ImportError(
+                "langchain-openai is not installed. "
+                "Run: pip install langchain-openai"
+            )
+        api_key = _os.environ.get("OPENAI_API_KEY", "")
+        if not _is_configured_secret(api_key):
+            raise ValueError("OPENAI_API_KEY environment variable is not set.")
+        return _ChatOpenAI(
+            model=model_id,
+            temperature=temperature,
+            api_key=api_key,
+        )
+
+    if provider == "anthropic":
+        if not _ANTHROPIC_AVAILABLE:
+            raise ImportError(
+                "langchain-anthropic is not installed. "
+                "Run: pip install langchain-anthropic"
+            )
+        api_key = _os.environ.get("ANTHROPIC_API_KEY", "")
+        if not _is_configured_secret(api_key):
+            raise ValueError("ANTHROPIC_API_KEY environment variable is not set.")
+        return _ChatAnthropic(
+            model=model_id,
+            temperature=temperature,
+            api_key=api_key,
+        )
+
+    if provider == "google":
+        if not _GOOGLE_AVAILABLE:
+            raise ImportError(
+                "langchain-google-genai is not installed. "
+                "Run: pip install langchain-google-genai"
+            )
+        api_key = _os.environ.get("GOOGLE_API_KEY", "")
+        if not _is_configured_secret(api_key):
+            raise ValueError("GOOGLE_API_KEY environment variable is not set.")
+        return _ChatGoogleGenerativeAI(
+            model=model_id,
+            temperature=temperature,
+            google_api_key=api_key,
         )
 
     # Default: Ollama (local)

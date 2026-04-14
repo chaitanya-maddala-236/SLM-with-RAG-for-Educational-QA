@@ -34,6 +34,12 @@ MODEL_REGISTRY = [
      "model_id": "phi3", "params_billions": 3.8,
      "context_window": 4096, "cost_per_1k_input_tokens": 0.0,
      "cost_per_1k_output_tokens": 0.0},
+    # Alias matching "Phi-3 Mini" naming
+    {"name": "phi3-mini", "type": "SLM", "provider": "ollama",
+     "model_id": "phi3:mini", "params_billions": 3.8,
+     "context_window": 4096, "cost_per_1k_input_tokens": 0.0,
+     "cost_per_1k_output_tokens": 0.0,
+     "description": "Phi-3 Mini (alias)"},
     {"name": "gemma2", "type": "SLM", "provider": "ollama",
      "model_id": "gemma2:2b", "params_billions": 2.0,
      "context_window": 8192, "cost_per_1k_input_tokens": 0.0,
@@ -45,6 +51,33 @@ MODEL_REGISTRY = [
     {"name": "mistral", "type": "SLM", "provider": "ollama",
      "model_id": "mistral", "params_billions": 7.0,
      "context_window": 8192, "cost_per_1k_input_tokens": 0.0,
+     "cost_per_1k_output_tokens": 0.0},
+    # Alias matching "Mistral 7B Instruct" naming
+    {"name": "mistral-7b-instruct", "type": "SLM", "provider": "ollama",
+     "model_id": "mistral:7b-instruct", "params_billions": 7.0,
+     "context_window": 8192, "cost_per_1k_input_tokens": 0.0,
+     "cost_per_1k_output_tokens": 0.0,
+     "description": "Mistral 7B Instruct (alias)"},
+    # ── Open-source LLMs (local) ──────────────────────────────────────────────
+    {"name": "llama3-8b", "type": "LLM", "provider": "ollama",
+     "model_id": "llama3:8b", "params_billions": 8.0,
+     "context_window": 8192, "cost_per_1k_input_tokens": 0.0,
+     "cost_per_1k_output_tokens": 0.0},
+    {"name": "llama3-70b", "type": "LLM", "provider": "ollama",
+     "model_id": "llama3:70b", "params_billions": 70.0,
+     "context_window": 8192, "cost_per_1k_input_tokens": 0.0,
+     "cost_per_1k_output_tokens": 0.0},
+    {"name": "mixtral-8x7b", "type": "LLM", "provider": "ollama",
+     "model_id": "mixtral:8x7b", "params_billions": 46.7,
+     "context_window": 32768, "cost_per_1k_input_tokens": 0.0,
+     "cost_per_1k_output_tokens": 0.0},
+    {"name": "qwen2.5-7b", "type": "LLM", "provider": "ollama",
+     "model_id": "qwen2.5:7b", "params_billions": 7.0,
+     "context_window": 32768, "cost_per_1k_input_tokens": 0.0,
+     "cost_per_1k_output_tokens": 0.0},
+    {"name": "deepseek-llm", "type": "LLM", "provider": "ollama",
+     "model_id": "deepseek-llm", "params_billions": 7.0,
+     "context_window": 4096, "cost_per_1k_input_tokens": 0.0,
      "cost_per_1k_output_tokens": 0.0},
     # ── Groq API LLMs ─────────────────────────────────────────────────────────
     {"name": "groq-llama3-8b", "type": "LLM", "provider": "groq",
@@ -67,6 +100,19 @@ MODEL_REGISTRY = [
      "model_id": "gemma2-9b-it", "params_billions": 9.0,
      "context_window": 8192, "cost_per_1k_input_tokens": 0.00020,
      "cost_per_1k_output_tokens": 0.00020},
+    # ── Commercial API LLMs ───────────────────────────────────────────────────
+    {"name": "gpt-4o", "type": "LLM", "provider": "openai",
+     "model_id": "gpt-4o", "params_billions": None,
+     "context_window": 128000, "cost_per_1k_input_tokens": 0.005,
+     "cost_per_1k_output_tokens": 0.015},
+    {"name": "claude-3.5-sonnet", "type": "LLM", "provider": "anthropic",
+     "model_id": "claude-3-5-sonnet-20241022", "params_billions": None,
+     "context_window": 200000, "cost_per_1k_input_tokens": 0.003,
+     "cost_per_1k_output_tokens": 0.015},
+    {"name": "gemini-1.5-pro", "type": "LLM", "provider": "google",
+     "model_id": "gemini-1.5-pro", "params_billions": None,
+     "context_window": 1000000, "cost_per_1k_input_tokens": 0.0035,
+     "cost_per_1k_output_tokens": 0.0105},
     # ── Groq vision LLM (for multimodal image analysis) ────────────────────────
     # llama-3.2-11b-vision-preview is the dedicated vision model used by
     # VisionImageAnalyzer when GROQ_API_KEY is set.  Listed here so it appears
@@ -179,6 +225,13 @@ EMBEDDING_MODELS = [
     {"name": "text-embedding-3-large", "model_id": "text-embedding-3-large",
      "dimension": 3072, "type": "openai",
      "description": "OpenAI text-embedding-3-large — benchmark, requires OPENAI_API_KEY"},
+    # Multimodal-capable embedding backbones for image+text alignment
+    {"name": "siglip", "model_id": "google/siglip-base-patch16-224",
+     "dimension": 768, "type": "huggingface",
+     "description": "SigLIP — improved CLIP-style alignment for multimodal retrieval"},
+    {"name": "openclip", "model_id": "laion/CLIP-ViT-B-32-laion2B-s34B-b79K",
+     "dimension": 512, "type": "huggingface",
+     "description": "OpenCLIP — flexible CLIP-family model with many pretrained variants"},
 ]
 
 # Default embedding (current system)

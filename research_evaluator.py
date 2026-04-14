@@ -199,6 +199,9 @@ class ResearchEvaluator:
         """Return True if *model_name* is available.
 
         - For Groq models (provider="groq"): checks that GROQ_API_KEY is set.
+        - For OpenAI models (provider="openai"): checks OPENAI_API_KEY.
+        - For Anthropic models (provider="anthropic"): checks ANTHROPIC_API_KEY.
+        - For Google models (provider="google"): checks GOOGLE_API_KEY.
         - For Ollama models: checks ``ollama list`` output.
         """
         import os as _os
@@ -206,6 +209,12 @@ class ResearchEvaluator:
         provider = cfg.get("provider", "ollama")
         if provider == "groq":
             return _is_configured_secret(_os.environ.get("GROQ_API_KEY", ""))
+        if provider == "openai":
+            return _is_configured_secret(_os.environ.get("OPENAI_API_KEY", ""))
+        if provider == "anthropic":
+            return _is_configured_secret(_os.environ.get("ANTHROPIC_API_KEY", ""))
+        if provider == "google":
+            return _is_configured_secret(_os.environ.get("GOOGLE_API_KEY", ""))
         # Default: Ollama — check ollama list
         try:
             proc = subprocess.run(

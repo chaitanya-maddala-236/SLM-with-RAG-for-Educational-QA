@@ -4,7 +4,7 @@ multimodal_processor.py
 Multimodal extension for the Educational RAG system.
 
 Provides:
-  - CLIPEmbedder       — CLIP-based image/text encoder (openai/clip-vit-base-patch32)
+  - CLIPEmbedder       — multimodal image/text encoder (CLIP / SigLIP / OpenCLIP)
   - ImageCaptioner     — BLIP-based image captioner (Salesforce/blip-image-captioning-base)
   - VisionImageAnalyzer — Vision LLM-based image analyzer (Groq vision → Ollama LLaVA → BLIP)
   - ImageFAISSIndex    — FAISS inner-product index for fast image similarity search
@@ -23,7 +23,7 @@ Design notes:
       3. BLIP captioner — basic caption when no vision LLM is available
     The analyzer generates a rich educational description that includes all visible
     text, labels, formulas, and diagram components — far beyond a generic caption.
-  - CLIP text-encoder is also exposed so that a plain text query can search the
+  - Multimodal text-encoder is exposed so that a plain text query can search the
     image index (shared embedding space).
   - Image embeddings are L2-normalised before insertion; FAISS IndexFlatIP
     (inner product) then gives cosine similarity directly.
@@ -38,6 +38,7 @@ from __future__ import annotations
 import io
 import json
 import os
+import warnings
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Optional
 
@@ -52,6 +53,8 @@ _TRANSFORMERS_AVAILABLE = False
 try:
     import torch
     from transformers import (  # type: ignore[import]
+        AutoModel,
+        AutoProcessor,
         CLIPModel,
         CLIPProcessor,
         BlipForConditionalGeneration,
@@ -110,8 +113,41 @@ OLLAMA_VISION_MODEL_CANDIDATES = ["llava", "llava:7b", "llava:13b", "bakllava", 
 DEFAULT_INDEX_PATH = "image_index.faiss"
 DEFAULT_META_PATH = "image_meta.json"
 
-# Embedding dimension for openai/clip-vit-base-patch32
-CLIP_DIM = 512
+# Multimodal embedding backbones.
+# Keys can be selected via MULTIMODAL_EMBEDDING_MODEL env var.
+MULTIMODAL_EMBEDDING_REGISTRY = {
+    "clip": {
+        "model_id": "openai/clip-vit-base-patch32",
+        "family": "clip",
+        "dimension": 512,
+    },
+    "siglip": {
+        "model_id": "google/siglip-base-patch16-224",
+        "family": "siglip",
+        "dimension": 768,
+    },
+    "openclip": {
+        "model_id": "laion/CLIP-ViT-B-32-laion2B-s34B-b79K",
+        "family": "clip",
+        "dimension": 512,
+    },
+}
+
+DEFAULT_MULTIMODAL_EMBEDDING_NAME = os.environ.get(
+    "MULTIMODAL_EMBEDDING_MODEL", "clip"
+).strip().lower() or "clip"
+
+# Embedding dimension fallback for legacy callers
+_default_mm_cfg = MULTIMODAL_EMBEDDING_REGISTRY.get(DEFAULT_MULTIMODAL_EMBEDDING_NAME)
+if _default_mm_cfg is None:
+    warnings.warn(
+        "Unknown MULTIMODAL_EMBEDDING_MODEL="
+        f"'{DEFAULT_MULTIMODAL_EMBEDDING_NAME}', defaulting to 'clip'.",
+        UserWarning,
+        stacklevel=2,
+    )
+    _default_mm_cfg = MULTIMODAL_EMBEDDING_REGISTRY.get("clip", {"dimension": 512})
+CLIP_DIM = int(_default_mm_cfg.get("dimension", 512))
 
 # ── API key validation helper ─────────────────────────────────────────────────
 
@@ -166,10 +202,39 @@ class CLIPEmbedder:
                 "Pillow is required for image processing. "
                 "Install with: pip install Pillow"
             )
-        print(f"  [CLIP] Loading model: {model_id}")
-        self._processor: CLIPProcessor = CLIPProcessor.from_pretrained(model_id)
-        self._model: CLIPModel = CLIPModel.from_pretrained(model_id)
+        selected_name = DEFAULT_MULTIMODAL_EMBEDDING_NAME
+        self._selected_name = selected_name
+        cfg = MULTIMODAL_EMBEDDING_REGISTRY.get(selected_name)
+        if cfg:
+            model_id = cfg["model_id"]
+            self._family = cfg["family"]
+        else:
+            self._family = "clip"
+
+        print(f"  [MM Embedding] Loading model: {model_id} (family={self._family})")
+        if self._family == "siglip":
+            self._processor = AutoProcessor.from_pretrained(model_id)
+            self._model = AutoModel.from_pretrained(model_id)
+        else:
+            self._processor = CLIPProcessor.from_pretrained(model_id)
+            self._model = CLIPModel.from_pretrained(model_id)
         self._model.eval()
+        self._dim = self._infer_dimension()
+
+    @property
+    def dimension(self) -> int:
+        """Embedding dimensionality of the active multimodal model."""
+        return self._dim
+
+    def _infer_dimension(self) -> int:
+        """Infer embedding dimensionality from config metadata with safe fallback."""
+        cfg = MULTIMODAL_EMBEDDING_REGISTRY.get(self._selected_name)
+        if cfg:
+            return int(cfg["dimension"])
+        return CLIP_DIM
+
+    def _normalize(self, tensor):
+        return tensor / tensor.norm(dim=-1, keepdim=True)
 
     def embed_image(self, image: "_PILImage.Image") -> list[float]:
         """
@@ -183,8 +248,16 @@ class CLIPEmbedder:
         """
         inputs = self._processor(images=image, return_tensors="pt")
         with torch.no_grad():
-            features = self._model.get_image_features(**inputs)
-            features = features / features.norm(dim=-1, keepdim=True)
+            if hasattr(self._model, "get_image_features"):
+                features = self._model.get_image_features(**inputs)
+            else:
+                out = self._model(**inputs)
+                features = getattr(out, "image_embeds", None)
+                if features is None:
+                    features = getattr(out, "pooler_output", None)
+                if features is None:
+                    raise RuntimeError("Unable to extract image features from model output.")
+            features = self._normalize(features)
         return features[0].tolist()
 
     def embed_text(self, text: str) -> list[float]:
@@ -203,8 +276,16 @@ class CLIPEmbedder:
             text=[text], return_tensors="pt", padding=True, truncation=True
         )
         with torch.no_grad():
-            features = self._model.get_text_features(**inputs)
-            features = features / features.norm(dim=-1, keepdim=True)
+            if hasattr(self._model, "get_text_features"):
+                features = self._model.get_text_features(**inputs)
+            else:
+                out = self._model(**inputs)
+                features = getattr(out, "text_embeds", None)
+                if features is None:
+                    features = getattr(out, "pooler_output", None)
+                if features is None:
+                    raise RuntimeError("Unable to extract text features from model output.")
+            features = self._normalize(features)
         return features[0].tolist()
 
 
@@ -691,7 +772,7 @@ def build_image_index(
     """
     embedder = CLIPEmbedder()
     captioner = ImageCaptioner() if with_captions else None
-    idx = ImageFAISSIndex(dim=CLIP_DIM)
+    idx = ImageFAISSIndex(dim=embedder.dimension)
 
     for pdf_path in pdf_paths:
         print(f"  [ImageIndex] Processing: {pdf_path}")

@@ -20,6 +20,9 @@ langchain-ollama>=0.1.0
 # Groq API LLMs (llama3-8b, llama3-70b, mixtral, gemma2 via Groq cloud)
 # Requires GROQ_API_KEY environment variable
 langchain-groq>=0.1.0
+langchain-openai>=0.1.0
+langchain-anthropic>=0.1.0
+langchain-google-genai>=1.0.0
 python-dotenv>=1.0.1
 
 # Streamlit UI
