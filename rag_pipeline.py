@@ -113,7 +113,10 @@ from evaluation import compute_all_metrics
 from data_loader import get_texts_and_metadatas
 from research_config import MODEL_REGISTRY
 
-MULTIMODAL_MIN_WORDS = os.environ.get("MULTIMODAL_MIN_WORDS", "700")
+try:
+    MULTIMODAL_MIN_WORDS = str(int(os.environ.get("MULTIMODAL_MIN_WORDS", "700")))
+except ValueError:
+    MULTIMODAL_MIN_WORDS = "700"
 
 # ── Multimodal extension (optional; degrades gracefully when deps are absent) ─
 try:

@@ -107,8 +107,14 @@ def evaluate_results(df: "pd.DataFrame") -> "pd.DataFrame":
     for col in METRIC_COLUMNS:
         out[col] = pd.to_numeric(out[col], errors="coerce").fillna(0.0)
 
-    min_cost = max(out["cost_per_query"].min(), EPSILON)
-    out["cost_efficiency"] = min_cost / out["cost_per_query"].clip(lower=EPSILON)
+    all_zero_cost = bool((out["cost_per_query"] <= EPSILON).all())
+    if all_zero_cost:
+        out["cost_efficiency"] = 1.0
+        effective_cost_weight = 0.0
+    else:
+        min_cost = max(out["cost_per_query"].min(), EPSILON)
+        out["cost_efficiency"] = min_cost / out["cost_per_query"].clip(lower=EPSILON)
+        effective_cost_weight = COST_EFFICIENCY_WEIGHT
 
     if "avg_output_tokens" in out.columns:
         out["avg_output_tokens"] = pd.to_numeric(
@@ -126,7 +132,7 @@ def evaluate_results(df: "pd.DataFrame") -> "pd.DataFrame":
         + ANSWER_RELEVANCE_WEIGHT * out["answer_relevance"]
         + CONTEXT_PRECISION_WEIGHT * out["context_precision"]
         + CONTEXT_RECALL_WEIGHT * out["context_recall"]
-        + COST_EFFICIENCY_WEIGHT * out["cost_efficiency"]
+        + effective_cost_weight * out["cost_efficiency"]
         + token_weight * out["output_token_score"]
     )
     return out.sort_values(by="final_score", ascending=False).reset_index(drop=True)

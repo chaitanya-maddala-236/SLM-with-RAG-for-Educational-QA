@@ -55,7 +55,7 @@ MODEL_REGISTRY = [
     # Alias matching "Mistral 7B Instruct" naming
     {"name": "mistral-7b-instruct", "type": "SLM", "provider": "ollama",
      "model_id": "mistral:7b-instruct", "params_billions": 7.0,
-     "context_window": 32768, "cost_per_1k_input_tokens": 0.0,
+     "context_window": 8192, "cost_per_1k_input_tokens": 0.0,
      "cost_per_1k_output_tokens": 0.0,
      "description": "Mistral 7B Instruct (alias)"},
     # ── Open-source LLMs (local) ──────────────────────────────────────────────

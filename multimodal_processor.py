@@ -231,21 +231,7 @@ class CLIPEmbedder:
         cfg = MULTIMODAL_EMBEDDING_REGISTRY.get(self._selected_name)
         if cfg:
             return int(cfg["dimension"])
-        if not _PIL_AVAILABLE:
-            print(
-                "  [MM Embedding] Warning: Pillow unavailable and embedding config "
-                "not found; falling back to default CLIP dimension."
-            )
-            return CLIP_DIM
-        try:
-            sample = _PILImage.new("RGB", (32, 32), color=(255, 255, 255))
-            vec = self.embed_image(sample)
-            return int(len(vec))
-        except Exception:
-            cfg = MULTIMODAL_EMBEDDING_REGISTRY.get(DEFAULT_MULTIMODAL_EMBEDDING_NAME)
-            if cfg:
-                return int(cfg["dimension"])
-            return CLIP_DIM
+        return CLIP_DIM
 
     def _normalize(self, tensor):
         return tensor / tensor.norm(dim=-1, keepdim=True)
