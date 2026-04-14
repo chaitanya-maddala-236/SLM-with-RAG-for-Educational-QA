@@ -541,6 +541,19 @@ python -c "from data_loader import get_corpus_stats; import json; print(json.dum
 
 ## ▶️ How to Run
 
+### Quickstart (copy-paste)
+
+```bash
+cd /home/runner/work/SLM-with-RAG-for-Educational-QA/SLM-with-RAG-for-Educational-QA
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+cp .env.example .env   # add only the keys/models you plan to use
+streamlit run app.py
+```
+
+Open `http://localhost:8501`.
+
 ### Streamlit Chat UI
 
 ```bash
@@ -680,7 +693,9 @@ All results are written to the `results/` folder by default (or to a custom `--o
 
 ### Generate Evaluation Graphs
 
-After running comparison experiments, generate PNG graphs from result files:
+After running comparison experiments, generate PNG graphs from result files.
+
+Default behavior (recommended) reads all standard comparison outputs from `results/` and writes publication-style PNGs to `results/graphs/`:
 
 ```bash
 python evaluation_graphs/generate_evaluation_graphs.py
@@ -696,11 +711,27 @@ Custom input/output paths:
 
 ```bash
 python evaluation_graphs/generate_evaluation_graphs.py \
-  --input model_comparison_results.txt token_comparison_results.txt \
-  --output-dir evaluation_graphs/output
+  --input results/model_comparison_results.txt results/token_comparison_results.txt \
+  --output-dir results/graphs/research
 ```
 
-Graphs are saved to `evaluation_graphs/output/`.
+### Research-grade graph workflow
+
+```bash
+# 1) Produce comparison result tables
+python research_evaluator.py --mode model_comparison --retrieval hybrid --embedding bge-small
+python research_evaluator.py --mode embedding_comparison --model mistral-7b-instruct
+python research_evaluator.py --mode token_comparison
+
+# 2) Generate high-quality graph set (300 DPI savefig)
+python evaluation_graphs/generate_evaluation_graphs.py \
+  --input results/model_comparison_results.txt \
+          results/embedding_comparison_results.txt \
+          results/token_comparison_results.txt \
+  --output-dir results/graphs/research
+```
+
+Generated graphs include grouped accuracy charts, latency plots, hallucination-rate plots, token/cost plots, and latency-vs-accuracy scatter plots suitable for research reporting.
 
 ### Final Evaluation Script (table + graphs)
 
