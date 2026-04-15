@@ -378,7 +378,12 @@ class TestEmbeddingDimensionPlausibility(unittest.TestCase):
         """
         All practical embedding dimensions are a power of 2 or a small multiple
         of a power of 2 (e.g. 384 = 3×128, 768 = 3×256).
-        We just verify they are at least 64 and at most 4096.
+        Lower bound of 64: the smallest meaningful sentence embedding today
+        (e.g. distilled models) is at least 64 dimensions; anything smaller
+        would lose too much semantic signal to be useful for RAG retrieval.
+        Upper bound of 4096: the largest publicly available dense embedding
+        (OpenAI text-embedding-3-large) is 3072 dimensions; 4096 gives a
+        safe margin for future models while flagging implausible values.
         """
         for entry in EMBEDDING_MODELS:
             with self.subTest(embedding=entry["name"]):

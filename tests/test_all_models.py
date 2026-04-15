@@ -227,7 +227,10 @@ class TestCostComputation(unittest.TestCase):
 
     def setUp(self):
         self._avg_tokens = _avg_query_length_tokens()
-        # Simulate typical output ≈ 3× input (rough heuristic for QA responses)
+        # Typical QA responses are ~3× longer than the input question: short
+        # factual questions yield ≈2-3 sentence answers while explanation
+        # requests yield multi-paragraph answers; 3× is a conservative middle
+        # ground that gives a realistic estimated_cost_usd for every model.
         self._avg_output_tokens = self._avg_tokens * 3
 
     def test_cost_non_negative_for_all_models(self):

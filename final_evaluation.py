@@ -277,6 +277,9 @@ def _run_live_evaluation(
 
         faithfulness = avg_metrics.get("Faithfulness", 0.0)
         answer_relevance = avg_metrics.get("Answer Relevance", 0.0)
+        # "Context Relevance" from evaluation.py measures how relevant the
+        # retrieved context is to the question — this corresponds to the RAG
+        # metric commonly called "context_precision" in the RAGAS framework.
         context_precision = avg_metrics.get("Context Relevance", 0.0)
         # Use Recall@5 as context_recall (from evaluation.py recall_at_k)
         context_recall = avg_metrics.get("Recall@5", 0.0)
