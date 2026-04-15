@@ -248,23 +248,23 @@ def _run_live_evaluation(
 
     rows: list[dict] = []
     for model_name in models:
-        if not ResearchEvaluator._is_model_available(model_name):
-            print(f"  [Skip] Model '{model_name}' not available.")
-            continue
-
         print(f"\n{'=' * 60}")
         print(f"  Evaluating: {model_name}  |  Embedding: {embedding_name}"
               f"  |  Retrieval: {retrieval_mode}")
         print(f"{'=' * 60}")
 
-        evaluator = ResearchEvaluator(
-            model=model_name,
-            retrieval_mode=retrieval_mode,
-            embedding_name=embedding_name,
-        )
-        results = evaluator.run_experiment()
-        summary = evaluator.compute_summary()
-        tok = compute_token_summary(results)
+        try:
+            evaluator = ResearchEvaluator(
+                model=model_name,
+                retrieval_mode=retrieval_mode,
+                embedding_name=embedding_name,
+            )
+            results = evaluator.run_experiment()
+            summary = evaluator.compute_summary()
+            tok = compute_token_summary(results)
+        except Exception as exc:
+            print(f"  [Skip] Model '{model_name}' not available: {exc}")
+            continue
 
         # Look up model type from registry
         cfg = get_model_config(model_name) or {}

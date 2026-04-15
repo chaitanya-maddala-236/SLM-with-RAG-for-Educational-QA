@@ -213,8 +213,9 @@ class TestGetEmbeddingsFactory(unittest.TestCase):
     """
 
     def test_huggingface_embeddings_returned_for_hf_type(self):
-        from langchain_community.embeddings import HuggingFaceEmbeddings
-        mock_hf = MagicMock(spec=HuggingFaceEmbeddings)
+        # Use a plain MagicMock — no spec needed since _load_huggingface_embeddings
+        # is already patched and we only care that the factory returns the mock.
+        mock_hf = MagicMock()
         for entry in EMBEDDING_MODELS:
             if entry["type"] == "huggingface":
                 with self.subTest(embedding=entry["name"]):
@@ -453,19 +454,29 @@ class TestResearchEvaluatorEmbeddingIntegration(unittest.TestCase):
     """
 
     def _make_evaluator(self, embedding_name: str):
-        mock_vs = MagicMock()
-        mock_hf = MagicMock()
+        """
+        Instantiate ResearchEvaluator with all heavy I/O mocked so the test
+        is hermetic: no Ollama, no corpus loading, no BM25 index build, no
+        network calls.
 
-        with patch("retriever.get_embeddings", return_value=mock_hf), \
-             patch("retriever.Chroma", MagicMock(return_value=mock_vs)), \
-             patch("retriever.get_chunks", return_value=[
-                 MagicMock(page_content="test content",
-                           metadata={"topic": "water cycle"})
-             ]), \
-             patch("retriever.get_texts_and_metadatas",
-                   return_value=(["test text"], [{"topic": "water cycle"}])), \
-             patch("os.path.exists", return_value=False), \
-             patch("research_evaluator.build_vector_store", return_value=mock_vs):
+        Patches applied:
+          - research_evaluator.build_vector_store  → returns mock vector store
+          - rag_pipeline._build_llm                → returns mock LLM
+          - rag_pipeline.get_texts_and_metadatas   → returns small stub corpus
+          - rag_pipeline.build_bm25_index          → returns None (skipped)
+        """
+        mock_vs = MagicMock()
+        # vector_store._embedding_function is accessed in RAGPipeline.__init__
+        mock_vs._embedding_function = MagicMock()
+
+        stub_texts = ["test content about water cycle"]
+        stub_metas = [{"topic": "water cycle"}]
+
+        with patch("research_evaluator.build_vector_store", return_value=mock_vs), \
+             patch("rag_pipeline._build_llm", return_value=MagicMock()), \
+             patch("rag_pipeline.get_texts_and_metadatas",
+                   return_value=(stub_texts, stub_metas)), \
+             patch("rag_pipeline.build_bm25_index", return_value=None):
             from research_evaluator import ResearchEvaluator
             evaluator = ResearchEvaluator(
                 model="phi3",

@@ -585,7 +585,7 @@ install deps (1)
                                     └── final_evaluation (14)
 ```
 
-> **Tip:** Steps 3, 3b, 3c (unit tests) require no API keys and no running Ollama — they are fully mocked and should always pass.
+> **Tip:** Steps 3, 3b, 3c are lightweight unit-test steps that mock most heavy I/O (LLM construction, corpus loading, vector store, BM25 index). The model-availability check in `test_all_models.py` calls `ollama list` for Ollama providers, so Ollama tests may show as skipped/failed in environments where Ollama is not running — this is expected and does not indicate an application bug.
 
 ---
 

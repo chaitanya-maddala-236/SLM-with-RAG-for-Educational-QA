@@ -72,10 +72,16 @@ _PROVIDER_KEY_ENV = {
 def _avg_query_length_tokens() -> int:
     """
     Estimate average token count for TEST_QUERIES by word-split approximation.
-    Returns an int derived purely from the dataset — no hardcoded values.
+    Returns an int derived from the dataset.
+
+    Fallback: when TEST_QUERIES is empty (e.g. the dataset file is missing in
+    a stripped CI environment) the function returns the constant ``1`` — a safe
+    non-zero minimum that lets cost tests run without dividing by zero.  This
+    fallback constant is intentional and is clearly documented here rather than
+    pretending it is "purely computed".
     """
     if not TEST_QUERIES:
-        return 50  # safe minimum when dataset is empty
+        return 1  # intentional minimum — avoids divide-by-zero in cost tests
     total_words = sum(len(q["query"].split()) for q in TEST_QUERIES)
     avg_words = total_words / len(TEST_QUERIES)
     # ~1.3 tokens per word is a standard approximation for English text
@@ -409,47 +415,55 @@ class TestAPIKeyGuard(unittest.TestCase):
             )
 
     def test_groq_models_raise_without_key(self):
-        """groq-* models should raise when GROQ_API_KEY is not set."""
+        """groq-* models should raise ValueError when GROQ_API_KEY is not set."""
         for entry in MODEL_REGISTRY:
             if entry["provider"] == "groq":
                 with self.subTest(model=entry["name"]):
                     self._skip_if_key_present("groq")
-                    with patch.dict(os.environ, {}, clear=True):
-                        import rag_pipeline as _rag_mod
-                        with self.assertRaises((ValueError, RuntimeError, Exception)):
+                    import rag_pipeline as _rag_mod
+                    with patch.dict(os.environ, {}, clear=True), \
+                         patch.object(_rag_mod, "_GROQ_AVAILABLE", True, create=True), \
+                         patch.object(_rag_mod, "_ChatGroq", MagicMock(), create=True):
+                        with self.assertRaises(ValueError):
                             _rag_mod._build_llm(entry["name"])
 
     def test_openai_models_raise_without_key(self):
-        """openai models should raise when OPENAI_API_KEY is not set."""
+        """openai models should raise ValueError when OPENAI_API_KEY is not set."""
         for entry in MODEL_REGISTRY:
             if entry["provider"] == "openai":
                 with self.subTest(model=entry["name"]):
                     self._skip_if_key_present("openai")
-                    with patch.dict(os.environ, {}, clear=True):
-                        import rag_pipeline as _rag_mod
-                        with self.assertRaises((ValueError, RuntimeError, Exception)):
+                    import rag_pipeline as _rag_mod
+                    with patch.dict(os.environ, {}, clear=True), \
+                         patch.object(_rag_mod, "_OPENAI_AVAILABLE", True, create=True), \
+                         patch.object(_rag_mod, "_ChatOpenAI", MagicMock(), create=True):
+                        with self.assertRaises(ValueError):
                             _rag_mod._build_llm(entry["name"])
 
     def test_anthropic_models_raise_without_key(self):
-        """anthropic models should raise when ANTHROPIC_API_KEY is not set."""
+        """anthropic models should raise ValueError when ANTHROPIC_API_KEY is not set."""
         for entry in MODEL_REGISTRY:
             if entry["provider"] == "anthropic":
                 with self.subTest(model=entry["name"]):
                     self._skip_if_key_present("anthropic")
-                    with patch.dict(os.environ, {}, clear=True):
-                        import rag_pipeline as _rag_mod
-                        with self.assertRaises((ValueError, RuntimeError, Exception)):
+                    import rag_pipeline as _rag_mod
+                    with patch.dict(os.environ, {}, clear=True), \
+                         patch.object(_rag_mod, "_ANTHROPIC_AVAILABLE", True, create=True), \
+                         patch.object(_rag_mod, "_ChatAnthropic", MagicMock(), create=True):
+                        with self.assertRaises(ValueError):
                             _rag_mod._build_llm(entry["name"])
 
     def test_google_models_raise_without_key(self):
-        """google models should raise when GOOGLE_API_KEY is not set."""
+        """google models should raise ValueError when GOOGLE_API_KEY is not set."""
         for entry in MODEL_REGISTRY:
             if entry["provider"] == "google":
                 with self.subTest(model=entry["name"]):
                     self._skip_if_key_present("google")
-                    with patch.dict(os.environ, {}, clear=True):
-                        import rag_pipeline as _rag_mod
-                        with self.assertRaises((ValueError, RuntimeError, Exception)):
+                    import rag_pipeline as _rag_mod
+                    with patch.dict(os.environ, {}, clear=True), \
+                         patch.object(_rag_mod, "_GOOGLE_AVAILABLE", True, create=True), \
+                         patch.object(_rag_mod, "_ChatGoogleGenerativeAI", MagicMock(), create=True):
+                        with self.assertRaises(ValueError):
                             _rag_mod._build_llm(entry["name"])
 
 
