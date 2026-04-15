@@ -45,9 +45,10 @@ GROQ_API_KEY=...
 12. [How to Run](#-how-to-run)
 13. [Evaluation Commands](#-evaluation-commands)
 14. [Generate Evaluation Graphs](#generate-evaluation-graphs)
-15. [Example Conversation Flows](#-example-conversation-flows)
-16. [Research Overview](#-research-overview)
-17. [Requirements](#-requirements)
+15. [Final Evaluation Script — Standalone Model Comparison](#final-evaluation-script--standalone-model-comparison)
+16. [Example Conversation Flows](#-example-conversation-flows)
+17. [Research Overview](#-research-overview)
+18. [Requirements](#-requirements)
 
 ---
 
@@ -733,28 +734,136 @@ python evaluation_graphs/generate_evaluation_graphs.py \
 
 Generated graphs include grouped accuracy charts, latency plots, hallucination-rate plots, token/cost plots, and latency-vs-accuracy scatter plots suitable for research reporting.
 
-### Final Evaluation Script (table + graphs)
+### Final Evaluation Script — Standalone Model Comparison
 
-Create a CSV/JSON containing:
-- `model`
-- `faithfulness`
-- `answer_relevance`
-- `context_precision`
-- `context_recall`
-- `cost_per_query`
-- optional `avg_output_tokens`
+> **`final_evaluation.py` is fully standalone** — it does **not** import any
+> other module from this repository.  You can copy it to any machine with
+> Python 3.10+ and run it with only `pandas` and `matplotlib` installed.
 
-Run:
+#### What it computes
+
+| # | Metric | Description |
+|---|--------|-------------|
+| 1 | **Faithfulness** | How well the answer stays grounded in retrieved context (0–1) |
+| 2 | **Answer Relevance** | How directly the answer addresses the question (0–1) |
+| 3 | **Context Precision** | How relevant the retrieved context is to the question (0–1) |
+| 4 | **Context Recall** | What fraction of relevant documents were retrieved (0–1) |
+| 5 | **Hallucination Rate** | `1 − Faithfulness` — fraction of answer not grounded in context (0–1) |
+| 6 | **Cost per Query** | Estimated USD cost per query (from API token pricing) |
+| 7 | **Cost per Token** | `cost_per_query / avg_total_tokens` — normalised cost efficiency |
+| 8 | **Final Score** | Weighted combination: `0.28×Faith + 0.24×AnsRel + 0.18×CtxPrec + 0.15×CtxRec + 0.10×CostEff − 0.05×Halluc` |
+
+#### Input format (CSV or JSON)
+
+**Required columns:**
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `model` | string | Model name |
+| `faithfulness` | float | Faithfulness score (0–1) |
+| `answer_relevance` | float | Answer relevance score (0–1) |
+| `context_precision` | float | Context precision score (0–1) |
+| `context_recall` | float | Context recall score (0–1) |
+| `cost_per_query` | float | USD cost per query |
+
+**Optional columns** (used when present):
+
+| Column | Type | Description |
+|--------|------|-------------|
+| `model_type` | string | `"SLM"` or `"LLM"` — used for colour-coding graphs |
+| `avg_input_tokens` | int | Average input tokens per query |
+| `avg_output_tokens` | int | Average output tokens per query |
+| `avg_total_tokens` | int | Average total tokens per query (enables per-token cost) |
+| `latency_ms` | float | Average latency in milliseconds |
+| `topic_accuracy` | float | Topic classification accuracy (0–1) |
+| `mode_accuracy` | float | RAG mode classification accuracy (0–1) |
+
+#### Quick start
 
 ```bash
+# 1. Generate a sample CSV to see the expected format
+python final_evaluation.py --generate-sample
+
+# 2. Run the evaluation on the sample (or your own data)
 python final_evaluation.py --input results/final_metrics.csv
+
+# 3. Custom output directory
+python final_evaluation.py --input my_data.json --output-dir my_eval
 ```
 
-Outputs:
-- `results/final_evaluation/final_evaluation_results.csv`
-- `results/final_evaluation/final_score_by_model.png`
-- `results/final_evaluation/metrics_by_model.png`
-- `results/final_evaluation/cost_per_query_by_model.png`
+#### Graphs generated (8 publication-quality PNGs at 300 DPI)
+
+| # | File | Description |
+|---|------|-------------|
+| 1 | `01_final_score_by_model.png` | Bar chart of weighted final scores |
+| 2 | `02_five_metrics_comparison.png` | Grouped bars: Faithfulness, Answer Relevance, Context Precision, Context Recall, Hallucination Rate |
+| 3 | `03_cost_per_query.png` | Cost per query (USD) |
+| 4 | `04_cost_per_token.png` | Cost per token (USD) — only when `avg_total_tokens` is provided |
+| 5 | `05_hallucination_rate.png` | Hallucination rate (%) per model |
+| 6 | `06_avg_tokens_input_vs_output.png` | Grouped bar: input vs output tokens per query |
+| 7 | `07_latency_vs_accuracy.png` | Scatter plot: latency (ms) vs topic accuracy (%) |
+| 8 | `08_radar_quality_metrics.png` | Radar/spider chart of normalised quality metrics |
+
+#### Full outputs
+
+```
+results/final_evaluation/
+├── final_evaluation_results.csv       # Ranked results with all computed columns
+├── evaluation_report.txt              # Plain-text summary report
+├── 01_final_score_by_model.png
+├── 02_five_metrics_comparison.png
+├── 03_cost_per_query.png
+├── 04_cost_per_token.png
+├── 05_hallucination_rate.png
+├── 06_avg_tokens_input_vs_output.png
+├── 07_latency_vs_accuracy.png
+└── 08_radar_quality_metrics.png
+```
+
+#### Dependencies
+
+Only two packages are required (both already in `requirements.txt`):
+
+```bash
+pip install pandas matplotlib
+```
+
+#### Example end-to-end workflow
+
+```bash
+# Step 1 — Run research evaluator to produce comparison result files
+python research_evaluator.py --mode model_comparison --retrieval hybrid
+
+# Step 2 — Generate graph set from comparison tables
+python evaluation_graphs/generate_evaluation_graphs.py
+
+# Step 3 — Prepare a final_metrics.csv from your results (or use --generate-sample)
+python final_evaluation.py --generate-sample
+
+# Step 4 — Run standalone final evaluation
+python final_evaluation.py --input results/final_metrics.csv --output-dir results/final_evaluation
+```
+
+#### Console output example
+
+```
+════════════════════════════════════════════════════════════════════════════════
+  FINAL MODEL EVALUATION — 5 Metrics + Per-Token Cost
+════════════════════════════════════════════════════════════════════════════════
+            model model_type faithfulness answer_relevance context_precision ...
+   gemini-1.5-pro        LLM       0.8489           0.7854            0.7016 ...
+claude-3.5-sonnet        LLM       0.7979           0.8496            0.6621 ...
+     groq-mixtral        LLM       0.7661           0.7507            0.7983 ...
+          mistral        SLM       0.7257           0.5806            0.5583 ...
+              ...        ...          ...              ...               ... ...
+
+  🏆 Best model: gemini-1.5-pro  (final_score = 0.6522)
+     Best faithfulness: gemini-1.5-pro (0.8489)
+     Best answer_relevance: claude-3.5-sonnet (0.8496)
+     Cheapest (non-free): groq-llama3-8b ($0.00003947/query)
+     Free models: mistral, gemma2, tinyllama, llama3.2, phi3
+════════════════════════════════════════════════════════════════════════════════
+```
 
 ### Multimodal Master Prompt (SLM-optimized)
 
