@@ -26,7 +26,7 @@ What it does
         • Hallucination rate (bar)
         • Avg tokens breakdown — input vs output (grouped bar)
         • Latency vs accuracy scatter
-        • Radar / spider chart of normalised metrics
+        • Radar / spider chart of normalized metrics
 
 Input CSV / JSON schema
 ~~~~~~~~~~~~~~~~~~~~~~~
@@ -99,7 +99,7 @@ QUALITY_METRICS = [
     "context_recall",
 ]
 
-# Small floor value used to avoid divide-by-zero in cost normalisation.
+# Small floor value used to avoid divide-by-zero in cost normalization.
 EPSILON = 1e-9
 
 # Weighted-score coefficients (sum to ~1.0).
@@ -225,7 +225,9 @@ def _generate_sample_csv(path: Path) -> None:
         mtype = entry["type"]
         # SLMs are free but slightly lower quality; LLMs cost more but higher quality
         base_q = 0.55 if mtype == "SLM" else 0.72
-        noise = lambda: random.uniform(-0.08, 0.08)  # noqa: E731
+
+        def noise():
+            return random.uniform(-0.08, 0.08)
         faith = round(min(1.0, max(0.0, base_q + 0.10 + noise())), 4)
         ans_rel = round(min(1.0, max(0.0, base_q + 0.05 + noise())), 4)
         ctx_prec = round(min(1.0, max(0.0, base_q + noise())), 4)
@@ -315,7 +317,7 @@ def evaluate_results(df):
     Adds the following columns:
         hallucination_rate   = 1 - faithfulness
         cost_per_token       = cost_per_query / avg_total_tokens  (or 0.0)
-        cost_efficiency      = min_cost / cost  (normalised, 1 = cheapest)
+        cost_efficiency      = min_cost / cost  (normalized, 1 = cheapest)
         final_score          = weighted combination of all metrics
 
     Returns a new DataFrame sorted by final_score descending.
@@ -352,7 +354,7 @@ def evaluate_results(df):
         if opt_col in out.columns:
             out[opt_col] = pd.to_numeric(out[opt_col], errors="coerce").fillna(0.0)
 
-    # ── Cost efficiency (normalised) ──────────────────────────────────────────
+    # ── Cost efficiency (normalized) ──────────────────────────────────────────
     all_zero_cost = (out["cost_per_query"] <= EPSILON).all()
     if all_zero_cost:
         out["cost_efficiency"] = 1.0
@@ -529,10 +531,9 @@ def _save_graphs(df, output_dir: Path) -> list[Path]:
         plt.close()
         created.append(p)
 
-    # ── 8. Radar / spider chart (normalised quality metrics) ──────────────────
+    # ── 8. Radar / spider chart (normalized quality metrics) ──────────────────
     radar_keys = [k for k in QUALITY_METRICS if k in df.columns]
     if len(radar_keys) >= 3 and n <= 12:
-        from matplotlib.patches import FancyBboxPatch
         labels = [k.replace("_", "\n") for k in radar_keys]
         num_vars = len(radar_keys)
         angles = [i / float(num_vars) * 2 * math.pi for i in range(num_vars)]
