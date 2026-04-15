@@ -45,7 +45,7 @@ GROQ_API_KEY=...
 12. [How to Run](#-how-to-run)
 13. [Evaluation Commands](#-evaluation-commands)
 14. [Generate Evaluation Graphs](#generate-evaluation-graphs)
-15. [Final Evaluation Script — Standalone Model Comparison](#final-evaluation-script--standalone-model-comparison)
+15. [Final Evaluation Script — Dataset-Driven Model Comparison](#final-evaluation-script--dataset-driven-model-comparison)
 16. [Example Conversation Flows](#-example-conversation-flows)
 17. [Research Overview](#-research-overview)
 18. [Requirements](#-requirements)
@@ -734,28 +734,61 @@ python evaluation_graphs/generate_evaluation_graphs.py \
 
 Generated graphs include grouped accuracy charts, latency plots, hallucination-rate plots, token/cost plots, and latency-vs-accuracy scatter plots suitable for research reporting.
 
-### Final Evaluation Script — Standalone Model Comparison
+### Final Evaluation Script — Dataset-Driven Model Comparison
 
-> **`final_evaluation.py` is fully standalone** — it does **not** import any
-> other module from this repository.  You can copy it to any machine with
-> Python 3.10+ and run it with only `pandas` and `matplotlib` installed.
+> **`final_evaluation.py` runs the actual RAG pipeline** against the
+> `TEST_QUERIES` dataset defined in `research_config.py` and computes all
+> metrics from real pipeline outputs — **no hardcoded or sample data**.
+>
+> You can also load pre-computed metrics from a CSV/JSON file using `--input`.
 
 #### What it computes
 
-| # | Metric | Description |
-|---|--------|-------------|
-| 1 | **Faithfulness** | How well the answer stays grounded in retrieved context (0–1) |
-| 2 | **Answer Relevance** | How directly the answer addresses the question (0–1) |
-| 3 | **Context Precision** | How relevant the retrieved context is to the question (0–1) |
-| 4 | **Context Recall** | What fraction of relevant documents were retrieved (0–1) |
-| 5 | **Hallucination Rate** | `1 − Faithfulness` — fraction of answer not grounded in context (0–1) |
-| 6 | **Cost per Query** | Estimated USD cost per query (from API token pricing) |
-| 7 | **Cost per Token** | `cost_per_query / avg_total_tokens` — normalised cost efficiency |
-| 8 | **Final Score** | Weighted combination: `0.28×Faith + 0.24×AnsRel + 0.18×CtxPrec + 0.15×CtxRec + 0.10×CostEff − 0.05×Halluc` |
+All metrics are derived from running the pipeline on the dataset:
 
-#### Input format (CSV or JSON)
+| # | Metric | Source | Description |
+|---|--------|--------|-------------|
+| 1 | **Faithfulness** | `evaluation.py` token-overlap | How well the answer stays grounded in retrieved context (0–1) |
+| 2 | **Answer Relevance** | `evaluation.py` query-term recall | How directly the answer addresses the question (0–1) |
+| 3 | **Context Precision** | `evaluation.py` context relevance | How relevant the retrieved context is to the question (0–1) |
+| 4 | **Context Recall** | `evaluation.py` recall@K | What fraction of relevant documents were retrieved (0–1) |
+| 5 | **Hallucination Rate** | Derived: `1 − Faithfulness` | Fraction of answer not grounded in context (0–1) |
+| 6 | **Cost per Query** | Token counts × MODEL_REGISTRY rates | Estimated USD cost per query |
+| 7 | **Cost per Token** | `cost_per_query / avg_total_tokens` | Normalised cost efficiency |
+| 8 | **Final Score** | Weighted combination | `0.28×Faith + 0.24×AnsRel + 0.18×CtxPrec + 0.15×CtxRec + 0.10×CostEff − 0.05×Halluc` |
 
-**Required columns:**
+#### How to run
+
+```bash
+# 1. Run live evaluation on all available models (default)
+python final_evaluation.py
+
+# 2. Evaluate specific models only
+python final_evaluation.py --models phi3 groq-llama3-8b
+
+# 3. Custom retrieval mode and embedding
+python final_evaluation.py --retrieval hybrid --embedding bge-small
+
+# 4. Load from a pre-computed CSV/JSON (skips live evaluation)
+python final_evaluation.py --input results/final_metrics.csv
+
+# 5. Custom output directory
+python final_evaluation.py --output-dir my_eval
+```
+
+#### CLI options
+
+| Option | Default | Description |
+|--------|---------|-------------|
+| `--models` | All available models | Space-separated list of model names to evaluate |
+| `--retrieval` | `hybrid` | Retrieval mode: `vector_only`, `bm25_only`, or `hybrid` |
+| `--embedding` | `bge-small` | Embedding model for vector retrieval |
+| `--input` | *(none — live eval)* | Path to pre-computed CSV/JSON; skips live evaluation |
+| `--output-dir` | `results/final_evaluation` | Directory for output files |
+
+#### Input format (for `--input` mode)
+
+When using `--input`, the CSV/JSON must have these **required columns**:
 
 | Column | Type | Description |
 |--------|------|-------------|
@@ -778,19 +811,6 @@ Generated graphs include grouped accuracy charts, latency plots, hallucination-r
 | `topic_accuracy` | float | Topic classification accuracy (0–1) |
 | `mode_accuracy` | float | RAG mode classification accuracy (0–1) |
 
-#### Quick start
-
-```bash
-# 1. Generate a sample CSV to see the expected format
-python final_evaluation.py --generate-sample
-
-# 2. Run the evaluation on the sample (or your own data)
-python final_evaluation.py --input results/final_metrics.csv
-
-# 3. Custom output directory
-python final_evaluation.py --input my_data.json --output-dir my_eval
-```
-
 #### Graphs generated (8 publication-quality PNGs at 300 DPI)
 
 | # | File | Description |
@@ -808,6 +828,7 @@ python final_evaluation.py --input my_data.json --output-dir my_eval
 
 ```
 results/final_evaluation/
+├── computed_metrics.csv               # Raw metrics from live evaluation (only in live mode)
 ├── final_evaluation_results.csv       # Ranked results with all computed columns
 ├── evaluation_report.txt              # Plain-text summary report
 ├── 01_final_score_by_model.png
@@ -822,46 +843,53 @@ results/final_evaluation/
 
 #### Dependencies
 
-Only two packages are required (both already in `requirements.txt`):
+All dependencies are in `requirements.txt`:
 
 ```bash
-pip install pandas matplotlib
+pip install -r requirements.txt
 ```
+
+For live evaluation, you also need:
+- **Ollama** running locally (for SLM models: tinyllama, phi3, gemma2, etc.)
+- **API keys** set as environment variables (for LLM models: `GROQ_API_KEY`, `OPENAI_API_KEY`, etc.)
 
 #### Example end-to-end workflow
 
 ```bash
-# Step 1 — Run research evaluator to produce comparison result files
+# Step 1 — Run final evaluation directly (computes everything from the dataset)
+python final_evaluation.py --models phi3 groq-llama3-8b --retrieval hybrid
+
+# Step 2 — Or evaluate all available models at once
+python final_evaluation.py
+
+# Step 3 — (Optional) Also run research evaluator for detailed comparison tables
 python research_evaluator.py --mode model_comparison --retrieval hybrid
 
-# Step 2 — Generate graph set from comparison tables
+# Step 4 — (Optional) Generate additional graph sets from comparison tables
 python evaluation_graphs/generate_evaluation_graphs.py
-
-# Step 3 — Prepare a final_metrics.csv from your results (or use --generate-sample)
-python final_evaluation.py --generate-sample
-
-# Step 4 — Run standalone final evaluation
-python final_evaluation.py --input results/final_metrics.csv --output-dir results/final_evaluation
 ```
 
 #### Console output example
 
 ```
+Running live evaluation on 30 test queries...
+Models: ['phi3', 'groq-llama3-8b']
+Retrieval: hybrid | Embedding: bge-small
+
+============================================================
+  Evaluating: phi3  |  Embedding: bge-small  |  Retrieval: hybrid
+============================================================
+  ...
+  ✓ phi3: faith=0.612  ans_rel=0.534  ctx_prec=0.487  ctx_rec=0.891  cost/q=$0.000000  latency=3241ms
+
 ════════════════════════════════════════════════════════════════════════════════
   FINAL MODEL EVALUATION — 5 Metrics + Per-Token Cost
 ════════════════════════════════════════════════════════════════════════════════
-            model model_type faithfulness answer_relevance context_precision ...
-   gemini-1.5-pro        LLM       0.8489           0.7854            0.7016 ...
-claude-3.5-sonnet        LLM       0.7979           0.8496            0.6621 ...
-     groq-mixtral        LLM       0.7661           0.7507            0.7983 ...
-          mistral        SLM       0.7257           0.5806            0.5583 ...
-              ...        ...          ...              ...               ... ...
+         model model_type faithfulness answer_relevance context_precision ...
+          phi3        SLM       0.6120           0.5340            0.4870 ...
+groq-llama3-8b        LLM       0.7230           0.6210            0.5540 ...
 
-  🏆 Best model: gemini-1.5-pro  (final_score = 0.6522)
-     Best faithfulness: gemini-1.5-pro (0.8489)
-     Best answer_relevance: claude-3.5-sonnet (0.8496)
-     Cheapest (non-free): groq-llama3-8b ($0.00003947/query)
-     Free models: mistral, gemma2, tinyllama, llama3.2, phi3
+  🏆 Best model: groq-llama3-8b  (final_score = 0.5824)
 ════════════════════════════════════════════════════════════════════════════════
 ```
 
