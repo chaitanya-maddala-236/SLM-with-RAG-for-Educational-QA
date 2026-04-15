@@ -42,13 +42,14 @@ GROQ_API_KEY=...
 9. [Tech Stack](#️-tech-stack)
 10. [Project Structure](#-project-structure)
 11. [Setup & Installation](#-setup--installation)
-12. [How to Run](#-how-to-run)
-13. [Evaluation Commands](#-evaluation-commands)
-14. [Generate Evaluation Graphs](#generate-evaluation-graphs)
-15. [Final Evaluation Script — Dataset-Driven Model Comparison](#final-evaluation-script--dataset-driven-model-comparison)
-16. [Example Conversation Flows](#-example-conversation-flows)
-17. [Research Overview](#-research-overview)
-18. [Requirements](#-requirements)
+12. [Execution Order — Which File to Run After Which](#️-execution-order--which-file-to-run-after-which)
+13. [How to Run](#️-how-to-run)
+14. [Evaluation Commands](#-evaluation-commands)
+15. [Generate Evaluation Graphs](#generate-evaluation-graphs)
+16. [Final Evaluation Script — Dataset-Driven Model Comparison](#final-evaluation-script--dataset-driven-model-comparison)
+17. [Example Conversation Flows](#-example-conversation-flows)
+18. [Research Overview](#-research-overview)
+19. [Requirements](#-requirements)
 
 ---
 
@@ -540,12 +541,60 @@ python -c "from data_loader import get_corpus_stats; import json; print(json.dum
 
 ---
 
+## 🗂️ Execution Order — Which File to Run After Which
+
+Use this reference to understand the **recommended order** for running the project scripts.  Each row lists the step number, the script, and what it requires to already be in place.
+
+| Step | Script | What it does | Requires |
+|------|--------|--------------|----------|
+| 1 | `pip install -r requirements.txt` | Install all dependencies | Python 3.11+ |
+| 2 | `cp .env.example .env` | Create environment file with API keys | Step 1 |
+| 3 | `python test.py` | Run core unit tests (no network needed) | Step 1 |
+| 3b | `python tests/test_all_models.py` | Validate every MODEL_REGISTRY entry | Step 1 |
+| 3c | `python tests/test_all_embeddings.py` | Validate every EMBEDDING_MODELS entry | Step 1 |
+| 4 | `streamlit run app.py` | Launch interactive chat UI | Steps 1–2; Ollama running for local models |
+| 5 | `python main.py` | CLI demo (6 queries, pronoun resolution) | Steps 1–2; Ollama running |
+| 5b | `python main.py --ablation` | Ablation study (3 retrieval modes) | Steps 1–2; Ollama running |
+| 6 | `python research_evaluator.py --mode single --model <name>` | Single-model evaluation | Steps 1–2; model available |
+| 7 | `python research_evaluator.py --mode ablation --model <name>` | Retrieval ablation experiment | Step 6 |
+| 8 | `python research_evaluator.py --mode model_comparison` | Compare all models | Steps 1–2; models available |
+| 9 | `python research_evaluator.py --mode embedding_comparison --model <name>` | Compare all embeddings | Step 6 |
+| 10 | `python research_evaluator.py --mode token_comparison` | Token/cost analysis | Step 8 |
+| 11 | `python research_evaluator.py --mode slm_vs_llm` | SLM vs LLM comparison | Step 8 |
+| 12 | `python research_evaluator.py --mode full_matrix` | Full model × embedding grid | Steps 8–9 |
+| 13 | `python evaluation_graphs/generate_evaluation_graphs.py` | Generate graphs from result files | Steps 8–12 produce the required `.txt` result files |
+| 14 | `python final_evaluation.py` | Live final evaluation (computes from dataset) | Steps 1–2; models available |
+| 14b | `python final_evaluation.py --input results/final_metrics.csv` | Final evaluation from pre-computed CSV | Step 14 or manual CSV |
+
+### Dependency graph (simplified)
+
+```
+install deps (1)
+    └── setup .env (2)
+            ├── run tests (3, 3b, 3c)
+            ├── streamlit UI (4)
+            ├── CLI demo (5, 5b)
+            └── research_evaluator single (6)
+                    ├── ablation (7)
+                    ├── model_comparison (8)
+                    │       ├── token_comparison (10)
+                    │       └── slm_vs_llm (11)
+                    ├── embedding_comparison (9)
+                    └── full_matrix (12) ← needs 8 + 9
+                            └── generate_evaluation_graphs (13)
+                                    └── final_evaluation (14)
+```
+
+> **Tip:** Steps 3, 3b, 3c (unit tests) require no API keys and no running Ollama — they are fully mocked and should always pass.
+
+---
+
 ## ▶️ How to Run
 
 ### Quickstart (copy-paste)
 
 ```bash
-cd /home/runner/work/SLM-with-RAG-for-Educational-QA/SLM-with-RAG-for-Educational-QA
+cd /path/to/SLM-with-RAG-for-Educational-QA
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
@@ -594,7 +643,7 @@ python research_evaluator.py --list-embeddings
 ### Run the Test Suite
 
 ```bash
-# Run all unit tests (no API keys required for core tests)
+# Run core unit tests (no API keys or Ollama required)
 python test.py
 
 # Verbose output
@@ -602,9 +651,24 @@ python test.py -v
 
 # With pytest (if installed)
 pytest test.py -v
+
+# Parameterized tests for ALL registered models (validates MODEL_REGISTRY)
+python tests/test_all_models.py -v
+
+# Parameterized tests for ALL registered embeddings (validates EMBEDDING_MODELS)
+python tests/test_all_embeddings.py -v
+
+# Run all test files together with pytest
+pytest test.py tests/ -v
 ```
 
-Tests are divided into 15 classes covering: `research_config`, `embeddings`, chunking strategies (`chunk_fixed`, `chunk_sliding_window`, `chunk_semantic`, `get_chunks`), `BM25Index`, `mmr_rerank`, `cross_encoder_rerank`, `build_vector_store` (mocked), `hybrid_search` (mocked), `hierarchical_retrieve` (mocked), `retrieve_top_k` (mocked), `_build_llm` factory, `RAGPipeline.__init__` (mocked), `compute_all_metrics`, and the benchmark runner in `test_queries.py`.
+#### What each test file covers
+
+| File | Scope | Requires |
+|------|-------|----------|
+| `test.py` | Core pipeline: research_config, embeddings, retriever chunking strategies, BM25Index, MMR, cross-encoder, build_vector_store (mocked), hybrid_search (mocked), hierarchical_retrieve (mocked), _build_llm factory, RAGPipeline init (mocked), compute_all_metrics, benchmark runner | No API keys needed |
+| `tests/test_all_models.py` | Every MODEL_REGISTRY entry: schema, `get_model_config` lookup, LLM class dispatch per provider (mocked), API key guard, cost computation from TEST_QUERIES lengths, `_is_model_available`, TEST_QUERIES dataset sanity | No API keys needed |
+| `tests/test_all_embeddings.py` | Every EMBEDDING_MODELS entry: schema, `get_embedding_config` lookup, Chroma directory/collection uniqueness, `get_embeddings` factory dispatch (mocked), OpenAI key guard, `build_vector_store` per embedding (mocked), dimension plausibility, ResearchEvaluator instantiation (mocked) | No API keys needed |
 
 Tests that require API keys (OpenAI / Anthropic / Google) are automatically **skipped** when the corresponding environment variable is not set.
 
