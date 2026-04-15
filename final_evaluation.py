@@ -726,12 +726,11 @@ def main() -> None:
     # Save a summary text report
     report_path = output_dir / "evaluation_report.txt"
     with open(report_path, "w", encoding="utf-8") as f:
+        f.write("FINAL MODEL EVALUATION REPORT\n")
         if args.input is not None:
-            f.write(f"FINAL MODEL EVALUATION REPORT\n")
             f.write(f"Data source: {args.input}\n")
         else:
-            f.write(f"FINAL MODEL EVALUATION REPORT\n")
-            f.write(f"Data source: live evaluation (TEST_QUERIES dataset)\n")
+            f.write("Data source: live evaluation (TEST_QUERIES dataset)\n")
             f.write(f"Retrieval mode: {args.retrieval}\n")
             f.write(f"Embedding: {args.embedding}\n")
             f.write(f"Test queries: {len(TEST_QUERIES)}\n")
