@@ -581,7 +581,7 @@ def render_chat_column(pipeline: RAGPipeline, embedding_name: str = DEFAULT_EMBE
                 )
             else:
                 uploaded_image_bytes = uploaded_file.read()
-                st.image(uploaded_image_bytes, caption="Attached image", use_column_width=True)
+                st.image(uploaded_image_bytes, caption="Attached image", use_container_width=True)
 
     # Render existing chat history
     for msg in st.session_state.chat_history:

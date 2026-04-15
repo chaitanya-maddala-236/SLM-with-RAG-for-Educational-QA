@@ -261,9 +261,9 @@ After writing, verify:
 If yes, continue writing before stopping.
 
 Context:
-{context}
+{{context}}
 
-Question: {question}
+Question: {{question}}
 
 Answer:""",
 )
