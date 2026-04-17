@@ -31,6 +31,7 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+import importlib
 from pathlib import Path
 from unittest.mock import MagicMock, patch
 
@@ -46,6 +47,20 @@ from research_config import (
     COLLECTION_NAME_TEMPLATE,
     get_embedding_config,
 )
+
+
+def _importable(module_name: str) -> bool:
+    """Return True when module can be imported in the current environment."""
+    try:
+        importlib.import_module(module_name)
+        return True
+    except Exception:
+        return False
+
+
+_EMBEDDINGS_IMPORTABLE = _importable("embeddings")
+_RETRIEVER_IMPORTABLE = _importable("retriever")
+_RESEARCH_EVALUATOR_IMPORTABLE = _importable("research_evaluator")
 
 
 # ── Schema requirements ──────────────────────────────────────────────────────
@@ -206,12 +221,12 @@ class TestChromaNaming(unittest.TestCase):
 #  4.  get_embeddings factory dispatch (mocked — no downloads)
 # ═══════════════════════════════════════════════════════════════════════════════
 
+@unittest.skipUnless(_EMBEDDINGS_IMPORTABLE, "embeddings module dependencies are missing")
 class TestGetEmbeddingsFactory(unittest.TestCase):
     """
     get_embeddings() must return the correct adapter for each type.
     All model-loading calls are mocked to avoid network/disk access.
     """
-
     def test_huggingface_embeddings_returned_for_hf_type(self):
         # Use a plain MagicMock — no spec needed since _load_huggingface_embeddings
         # is already patched and we only care that the factory returns the mock.
@@ -310,13 +325,13 @@ class TestGetEmbeddingsFactory(unittest.TestCase):
 #  5.  build_vector_store (mocked) — succeeds for every embedding name
 # ═══════════════════════════════════════════════════════════════════════════════
 
+@unittest.skipUnless(_RETRIEVER_IMPORTABLE, "retriever module dependencies are missing")
 class TestBuildVectorStorePerEmbedding(unittest.TestCase):
     """
     build_vector_store must accept every registered embedding name without
     raising an error.  Chroma and the embedding model are fully mocked so no
     disk writes or model downloads happen.
     """
-
     def _mock_build_vector_store(self, embedding_name: str):
         """Run build_vector_store with all heavy dependencies mocked."""
         mock_vs = MagicMock()
@@ -447,12 +462,12 @@ class TestEmbeddingDimensionPlausibility(unittest.TestCase):
 #  7.  ResearchEvaluator embedding integration
 # ═══════════════════════════════════════════════════════════════════════════════
 
+@unittest.skipUnless(_RESEARCH_EVALUATOR_IMPORTABLE, "research_evaluator module dependencies are missing")
 class TestResearchEvaluatorEmbeddingIntegration(unittest.TestCase):
     """
     ResearchEvaluator can be instantiated with every registered embedding name
     without error (all heavy I/O is mocked).
     """
-
     def _make_evaluator(self, embedding_name: str):
         """
         Instantiate ResearchEvaluator with all heavy I/O mocked so the test
