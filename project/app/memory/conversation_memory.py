@@ -74,5 +74,5 @@ class ConversationMemory:
     def current_topic(self) -> TopicState | None:
         if not self.topic_scores:
             return None
-        topic = max(self.topic_scores, key=self.topic_scores.get)
+        topic = max(self.topic_scores, key=lambda t: self.topic_scores[t])
         return TopicState(topic=topic, score=self.topic_scores[topic])

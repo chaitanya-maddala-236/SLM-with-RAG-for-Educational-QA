@@ -51,7 +51,9 @@ async def run_ablation(dataset: list[dict[str, Any]], output_dir: str = "project
             "mean_mrr": mean(r["mrr"] for r in rows) if rows else 0.0,
             "mean_ndcg@k": mean(r["ndcg@k"] for r in rows) if rows else 0.0,
             "mean_latency_s": mean(r["latency_s"] for r in rows) if rows else 0.0,
-            "mean_bertscore_f1": mean(r["bertscore_f1"] for r in rows if r["bertscore_f1"] is not None) if rows else 0.0,
+            "mean_bertscore_f1": _safe_mean(
+                [r["bertscore_f1"] for r in rows if r["bertscore_f1"] is not None]
+            ),
         }
         results.append(summary)
 
@@ -74,3 +76,7 @@ def _plot_ablation(results: list[dict[str, Any]], output_dir: Path) -> None:
     plt.tight_layout()
     plt.savefig(output_dir / "ablation_ndcg.png")
     plt.close()
+
+
+def _safe_mean(values: list[float]) -> float:
+    return mean(values) if values else 0.0

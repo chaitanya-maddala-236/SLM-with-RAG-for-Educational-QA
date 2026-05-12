@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import dataclass
+from typing import Callable
 
 from project.app.prompts.templates import HYDE_PROMPT
 
@@ -16,7 +17,7 @@ class HyDEResult:
 
 def apply_hyde(
     query: str,
-    llm_generate: callable,
+    llm_generate: Callable[[str, int], str],
     hyde_enabled: bool,
 ) -> HyDEResult:
     if not hyde_enabled:

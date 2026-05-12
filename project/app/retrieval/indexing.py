@@ -7,9 +7,12 @@ from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 from langchain_text_splitters import RecursiveCharacterTextSplitter
 
-from data_loader import get_texts_and_metadatas
-from embeddings import get_embeddings
-from retriever import build_bm25_index, BM25Index
+from project.app.retrieval.legacy import (
+    BM25Index,
+    build_bm25_index,
+    get_embeddings,
+    get_texts_and_metadatas,
+)
 
 logger = logging.getLogger(__name__)
 

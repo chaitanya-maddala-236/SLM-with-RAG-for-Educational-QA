@@ -7,7 +7,7 @@ from dataclasses import dataclass
 from langchain_community.vectorstores import Chroma
 from langchain_core.documents import Document
 
-from retriever import BM25Index
+from project.app.retrieval.legacy import BM25Index
 
 logger = logging.getLogger(__name__)
 

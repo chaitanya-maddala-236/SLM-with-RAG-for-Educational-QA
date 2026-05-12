@@ -209,5 +209,8 @@ class EduSLMRAGPipeline:
         return sorted(set(citations))
 
     def _detect_uncertainty(self, answer: str, confidence: float) -> bool:
-        uncertainty_markers = ["not sure", "uncertain", "might", "possibly", "I don't know"]
-        return confidence < self.settings.retrieval.high_confidence or any(m in answer.lower() for m in uncertainty_markers)
+        uncertainty_markers = ["not sure", "uncertain", "might", "possibly", "i don't know"]
+        lower_answer = answer.lower()
+        return confidence < self.settings.retrieval.high_confidence or any(
+            marker in lower_answer for marker in uncertainty_markers
+        )
