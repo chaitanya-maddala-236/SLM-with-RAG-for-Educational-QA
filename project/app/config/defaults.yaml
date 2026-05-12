@@ -1,0 +1,48 @@
+app:
+  name: EduSLM-RAG
+  environment: development
+
+models:
+  default_slm: tinyllama
+  registry:
+    tinyllama:
+      model_name: tinyllama:1.1b
+      max_context_docs: 3
+      safe_context_budget: 1800
+    llama32_1b:
+      model_name: llama3.2:1b
+      max_context_docs: 4
+      safe_context_budget: 3600
+    llama32_3b:
+      model_name: llama3.2:3b
+      max_context_docs: 4
+      safe_context_budget: 3600
+
+generation:
+  temperature: 0.05
+  max_new_tokens: 180
+  repetition_penalty: 1.15
+  top_p: 0.9
+
+retrieval:
+  hyde_enabled: true
+  dense_top_k: 15
+  bm25_top_k: 15
+  fusion_pool_size: 30
+  rrf_k: 60
+  dense_weight: 0.6
+  bm25_weight: 0.4
+  mmr_lambda: 0.7
+  high_confidence: 0.60
+  low_confidence: 0.30
+  chunk_size: 320
+  chunk_overlap: 50
+
+memory:
+  short_term_limit: 8
+  summary_trigger_turns: 12
+  decay_rate: 0.25
+
+evaluation:
+  output_dir: project/experiments/outputs
+  default_k: 5

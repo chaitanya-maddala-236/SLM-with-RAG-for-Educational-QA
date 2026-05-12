@@ -1,0 +1,12 @@
+[
+  {
+    "question": "What is photosynthesis?",
+    "reference_answer": "Photosynthesis is the process by which green plants convert light energy into chemical energy.",
+    "relevant_docs": ["biology_basics"]
+  },
+  {
+    "question": "How does gravity affect falling objects?",
+    "reference_answer": "Gravity pulls objects toward Earth, causing them to accelerate downward.",
+    "relevant_docs": ["physics_motion"]
+  }
+]
