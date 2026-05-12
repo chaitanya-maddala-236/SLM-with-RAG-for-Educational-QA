@@ -1142,3 +1142,37 @@ pip install langchain-google-genai # Google
 ---
 
 *EduSLM-RAG is a research prototype. Corpus coverage, model behaviour, and evaluation results will vary by Ollama version and hardware.*
+
+---
+
+## EduSLM-RAG Modular Thesis Stack (New)
+
+A complete thesis-grade modular implementation is now available under `project/`:
+
+- `project/app/api/` — FastAPI service
+- `project/app/rag/` — 10-stage SLM RAG pipeline
+- `project/app/retrieval/` — HyDE + BM25 + dense + RRF
+- `project/app/reranking/` — MMR + compression
+- `project/app/memory/` — conversational memory with decay (`DECAY_RATE=0.25`)
+- `project/app/evaluation/` — metrics, runner, CSV/JSON export, ablation
+- `project/frontend/` — Streamlit app
+- `project/reports/` — thesis-ready architecture and methodology docs
+
+### Run FastAPI
+
+```bash
+uvicorn project.app.api.main:app --reload
+```
+
+### Run Streamlit
+
+```bash
+streamlit run project/frontend/streamlit_app.py
+```
+
+### Run Thesis Evaluation
+
+```bash
+python -m project.experiments.run_experiments --dataset project/datasets/sample_eval.json --mode single --model tinyllama
+python -m project.experiments.run_experiments --dataset project/datasets/sample_eval.json --mode ablation
+```
